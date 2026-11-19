@@ -396,7 +396,9 @@ codigo de las Lambdas y del runtime").
 1. Pendiente (operador): empaquetar y subir el zip de aprobacion, que lleva `aprobar.py` (`scripts/empaquetar.sh`; clave
    `agente-iam/aprobacion-<12 hex>.zip`).
 2. Pendiente (operador): empaquetar y subir el zip del aplicador, que es tambien el de avisos y lleva `aplicador.py`, `avisos.py` y
-   `aprobar.py` (clave `agente-iam/aplicador-<12 hex>.zip`). El zip del runtime no cambia: no lleva esos modulos.
+   `aprobar.py` (clave `agente-iam/aplicador-<12 hex>.zip`). El zip del runtime no lleva esos modulos, pero tambien hay que
+   reempaquetarlo y desplegarlo: el 19-11-2026 UTC `constraints.txt` subio OpenTelemetry (1.45.2 y 0.66b2) por un aviso de pip-audit, y los
+   tres zips lo llevan con `strands-agents`. Antes, una corrida del agente contra Bedrock con las versiones nuevas (sin medir).
 3. Pendiente (operador): change set de la pila base (`agente-iam-base`) con `ClaveCodigoAprobacion` nueva y el resto de parametros con
    `UsePreviousValue`; revisarlo y ejecutarlo con el si de Mateo.
 4. Pendiente (operador): change set de la pila del runtime (`agente-iam-runtime`) con `ClaveCodigoAplicador` nueva y el filtro de cuatro

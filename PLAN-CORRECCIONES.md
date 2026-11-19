@@ -1578,13 +1578,21 @@ de forks) no se pueden activar mientras el repositorio es privado, y la primera 
 encontro una vulnerabilidad conocida en una dependencia (`opentelemetry-api` 1.45.1, arreglada en 1.45.2); gitleaks, los tests, bandit y
 cfn-lint pasaron.
 
+**Dependencia (19-11-2026 UTC, local).** A peticion de Mateo se arreglo el aviso de pip-audit: `constraints.txt` sube `opentelemetry-api` y
+`opentelemetry-sdk` de 1.45.1 a 1.45.2, y `opentelemetry-semantic-conventions`, `opentelemetry-instrumentation` y
+`opentelemetry-instrumentation-threading` de 0.66b1 a 0.66b2 (los cinco a la vez, porque se fijan entre si con `==`). pip resolvio en seco
+solo esos cinco; instalados en el `.venv`, `pip check` no da requisitos rotos, pip-audit pasa de 1 vulnerabilidad a ninguna y la suite sigue
+en 1496 pasados y 1 saltado, con ruff y mypy limpios (`docs/MEDICIONES.md` W.9). Sin medir: una corrida real del agente contra Bedrock con
+las versiones nuevas (Strands usa OpenTelemetry para las trazas) y el empaquetado para aarch64. En la cuenta siguen las versiones
+anteriores hasta reempaquetar y desplegar los tres zips.
+
 Pendiente (quien):
 - Mateo: en GitHub, activar el correo `noreply` y el bloqueo de pushes que exponen el correo; y, cuando lo decida, pasar el repositorio
   nuevo a publico. El de origen (`Agente-IAM-privado`) no se borra hasta comprobar el nuevo.
 - Claude, justo despues del paso a publico: activar secret scanning con push protection, la proteccion de `main` con los checks `unitarios`
   y `seguridad`, y la aprobacion de PR de forks; hoy GitHub las rechaza por ser privado.
-- Claude, cuando Mateo lo pida: subir `opentelemetry-api` y los paquetes que lo fijan (`opentelemetry-sdk`, `opentelemetry-semantic-conventions`
-  y las dos instrumentaciones) en `constraints.txt`, reinstalar, correr la suite y `pip-audit`. Afecta al zip del runtime.
+- Operador, con el si de Mateo: reempaquetar y desplegar tambien el zip del runtime, por la dependencia subida (ver "Dependencia" arriba);
+  los tres zips llevan `strands-agents` y, con el, OpenTelemetry.
 - Claude: llevar cada cambio de la rama de trabajo a `publico` con un commit normal encima (mismo arbol, autor `noreply`, sin forzar la
   subida), hasta que se trabaje directamente sobre el repositorio nuevo.
 - Mateo: decidir lo que queda de "Conviene": el `sub` visible en el video de 0:30 a 0:39, `docs/superpowers/` y cuanto del trabajo con el

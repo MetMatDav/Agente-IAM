@@ -2274,3 +2274,20 @@ Medido contra GitHub, no contra la cuenta AWS.
 - **Sin medir:** que el aviso de pip-audit afecte de verdad al uso que hace el proyecto de esa libreria; y las protecciones, que no existen
   todavia.
 
+### W.9 Dependencia con aviso de pip-audit (19-11-2026 UTC, local)
+
+Medido en el `.venv` del proyecto, con red hacia PyPI y hacia la base de avisos de pip-audit; no contra la cuenta.
+
+| Que | Antes | Despues |
+|---|---|---|
+| `opentelemetry-api`, `opentelemetry-sdk` | 1.45.1 | 1.45.2 |
+| `opentelemetry-semantic-conventions`, `opentelemetry-instrumentation`, `opentelemetry-instrumentation-threading` | 0.66b1 | 0.66b2 |
+| `python -m pip_audit -r constraints.txt --no-deps` (el comando de `scripts/pruebas.sh`) | 1 vulnerabilidad (`CVE-2026-126360`, en el CI, W.8) | "No known vulnerabilities found" |
+| `pip check` | sin requisitos rotos | sin requisitos rotos |
+| Suite (`./.venv/bin/python -m pytest tests/ -q`) | 1496 pasados y 1 saltado | 1496 pasados y 1 saltado |
+
+- La resolucion en seco de pip (`--dry-run`) dio que se instalarian solo esos cinco paquetes. `ruff check .` y `mypy` pasan; `strands` 1.54.0
+  y `bedrock-agentcore` 1.22.0 importan con las versiones nuevas.
+- **Sin medir:** una corrida del agente contra Bedrock con las versiones nuevas; el empaquetado para aarch64 (`scripts/empaquetar.sh`); y si
+  el aviso afectaba de verdad al uso que hace el proyecto de la libreria. En la cuenta siguen las versiones anteriores.
+

@@ -28,7 +28,8 @@ y pruebas de AgentCore); `docs/arquitectura/GUIA-VISUAL.md` (diagramas y animaci
   (18-11-2026, rama `docs/fase-9-y-gitignore`, sin subir a GitHub). La version publica (rama `publico`, un solo commit con autor `noreply` y licencia
   MIT) esta subida desde el 19-11-2026 UTC al repositorio nuevo `MetMatDav/Agente-IAM`, todavia privado; el de origen se llama ahora
   `Agente-IAM-privado` y es el remoto `origin` (PLAN, Fase 33, "Publicacion"; `docs/MEDICIONES.md` W.8). Falta: que Mateo lo pase a
-  publico, activar entonces las tres protecciones, y arreglar el aviso de pip-audit sobre `opentelemetry-api` que deja en rojo el CI.
+  publico y activar entonces las tres protecciones. El aviso de pip-audit sobre `opentelemetry-api` que dejo en rojo el CI esta arreglado
+  en `constraints.txt` (W.9); falta reempaquetar y desplegar los tres zips para que la cuenta lleve las versiones nuevas.
 
 **Anterior (02-11-2026 UTC)**
 
