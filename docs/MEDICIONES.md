@@ -2291,3 +2291,19 @@ Medido en el `.venv` del proyecto, con red hacia PyPI y hacia la base de avisos 
 - **Sin medir:** una corrida del agente contra Bedrock con las versiones nuevas; el empaquetado para aarch64 (`scripts/empaquetar.sh`); y si
   el aviso afectaba de verdad al uso que hace el proyecto de la libreria. En la cuenta siguen las versiones anteriores.
 
+### W.10 Repositorio publico y protecciones (19-11-2026 UTC, `gh` y lectura sin sesion)
+
+Medido contra GitHub, no contra la cuenta AWS.
+
+- **CI tras el arreglo de W.9:** sobre el commit de la dependencia, `unitarios` y `seguridad` en `success` (antes, W.8, `seguridad` fallaba
+  en pip-audit).
+- **Publico:** `MetMatDav/Agente-IAM` con visibilidad `public` (lo cambio Mateo); GitHub detecta la licencia MIT. Sin sesion: la pagina
+  responde 200, hay tres commits y todos llevan la direccion `noreply`, una rama (`main`) y ningun PR.
+- **Protecciones, activadas con el si de Mateo y releidas:** `secret_scanning` y `secret_scanning_push_protection` en `enabled`, con 0
+  alertas; proteccion de `main` con los checks `unitarios` y `seguridad`, sin subidas forzadas ni borrado, y sin obligar a administradores;
+  aprobacion de PR de forks en `all_external_contributors`. El token por defecto de Actions es de solo lectura y no puede aprobar PR.
+- **Repositorio de origen:** `MetMatDav/Agente-IAM-privado` responde 404, con sesion y sin ella, y no sale en la lista de repositorios de
+  la cuenta; el remoto `origin` local no responde. La historia anterior queda solo en la copia local.
+- **Sin medir:** las alertas de dependencias de GitHub no estan activadas (la lectura da 404); si Mateo activo el correo `noreply` y el
+  bloqueo de pushes que exponen el correo en su cuenta (no se puede leer con este acceso); y un PR real desde un fork.
+

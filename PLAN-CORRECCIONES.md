@@ -1559,7 +1559,7 @@ Lo que no se arreglo:
 - Pista 2 (escrituras que configuran entrega): cambia `ACCIONES_PROHIBIDAS` y regenera el techo, que hay que desplegar. Pendiente.
 - Pista 1 (operador): es rediseno de los limites por rol. Pendiente de la postura de Mateo.
 
-**Publicacion (rama preparada el 18-11-2026; subida a un repositorio nuevo, todavia privado, el 19-11-2026 UTC).** Mateo decidio publicar con
+**Publicacion (rama preparada el 18-11-2026; repositorio nuevo creado, subido y hecho publico el 19-11-2026 UTC).** Mateo decidio publicar con
 historia nueva. Queda preparada la rama `publico`:
 un solo commit sin padres, hecho con `git commit-tree` sobre el mismo arbol que la rama de trabajo, con autor y committer en la direccion
 `noreply` de GitHub. Para eso se anadio la licencia MIT (`LICENSE`, decision de Claude por delegacion de Mateo; se puede cambiar antes de
@@ -1586,11 +1586,15 @@ en 1496 pasados y 1 saltado, con ruff y mypy limpios (`docs/MEDICIONES.md` W.9).
 las versiones nuevas (Strands usa OpenTelemetry para las trazas) y el empaquetado para aarch64. En la cuenta siguen las versiones
 anteriores hasta reempaquetar y desplegar los tres zips.
 
+Publico (19-11-2026 UTC; `docs/MEDICIONES.md` W.10). Mateo paso `MetMatDav/Agente-IAM` a publico. Acto seguido Claude activo, con su si, las
+tres protecciones que GitHub rechazaba en privado: secret scanning con push protection, la proteccion de `main` (checks `unitarios` y
+`seguridad`, sin subidas forzadas ni borrado) y la aprobacion de PR de forks para todo colaborador externo. Leido sin sesion: tres commits,
+todos con la direccion `noreply`, una rama, ningun PR. El CI quedo en verde sobre el commit de la dependencia. El repositorio de origen
+(`Agente-IAM-privado`) ya no existe en GitHub: la historia anterior queda solo en la copia local de Mateo y el remoto `origin` no responde.
+
 Pendiente (quien):
-- Mateo: en GitHub, activar el correo `noreply` y el bloqueo de pushes que exponen el correo; y, cuando lo decida, pasar el repositorio
-  nuevo a publico. El de origen (`Agente-IAM-privado`) no se borra hasta comprobar el nuevo.
-- Claude, justo despues del paso a publico: activar secret scanning con push protection, la proteccion de `main` con los checks `unitarios`
-  y `seguridad`, y la aprobacion de PR de forks; hoy GitHub las rechaza por ser privado.
+- Mateo: en GitHub, activar el correo `noreply` y el bloqueo de pushes que exponen el correo, si no lo hizo ya (Claude no puede leerlo).
+- Mateo: decidir si guarda una copia de la historia anterior fuera de esta maquina (hoy solo existe en la copia local).
 - Operador, con el si de Mateo: reempaquetar y desplegar tambien el zip del runtime, por la dependencia subida (ver "Dependencia" arriba);
   los tres zips llevan `strands-agents` y, con el, OpenTelemetry.
 - Claude: llevar cada cambio de la rama de trabajo a `publico` con un commit normal encima (mismo arbol, autor `noreply`, sin forzar la

@@ -26,10 +26,11 @@ y pruebas de AgentCore); `docs/arquitectura/GUIA-VISUAL.md` (diagramas y animaci
   decisiones de Mateo (licencia, cuanto del trabajo con el asistente se ve, su postura sobre el operador), el despliegue de lo arreglado
   (operador, con el si de Mateo; `docs/DESPLIEGUE.md`) y el repositorio publico nuevo con un solo commit. La Fase 33 esta en `06b3785`
   (18-11-2026, rama `docs/fase-9-y-gitignore`, sin subir a GitHub). La version publica (rama `publico`, un solo commit con autor `noreply` y licencia
-  MIT) esta subida desde el 19-11-2026 UTC al repositorio nuevo `MetMatDav/Agente-IAM`, todavia privado; el de origen se llama ahora
-  `Agente-IAM-privado` y es el remoto `origin` (PLAN, Fase 33, "Publicacion"; `docs/MEDICIONES.md` W.8). Falta: que Mateo lo pase a
-  publico y activar entonces las tres protecciones. El aviso de pip-audit sobre `opentelemetry-api` que dejo en rojo el CI esta arreglado
-  en `constraints.txt` (W.9); falta reempaquetar y desplegar los tres zips para que la cuenta lleve las versiones nuevas.
+  MIT) esta en el repositorio nuevo `MetMatDav/Agente-IAM`, que Mateo hizo publico el 19-11-2026 UTC; ese dia quedaron activas las tres
+  protecciones (secret scanning con push protection, proteccion de `main` y aprobacion de PR de forks) y el CI en verde (PLAN, Fase 33,
+  "Publicacion"; `docs/MEDICIONES.md` W.8 a W.10). El repositorio de origen ya no existe en GitHub: su historia queda solo en la copia local,
+  y el remoto `origin` no responde. El aviso de pip-audit sobre `opentelemetry-api` esta arreglado en `constraints.txt` (W.9); falta
+  reempaquetar y desplegar los tres zips para que la cuenta lleve las versiones nuevas y los arreglos de codigo.
 
 **Anterior (02-11-2026 UTC)**
 
@@ -1036,7 +1037,7 @@ pida. Lo hecho vive en `PLAN-CORRECCIONES.md` y en `docs/MEDICIONES.md`.
    asignar/crear (los permisos con caducidad son el bloque 1 de la Fase 23, desplegado el 26-10-2026).
 5. **Video de demostracion (Fase 32) hecho el 02-11-2026** en `portafolio/demo-agente-iam-es.mp4`; publicarlo en LinkedIn (Mateo).
 6. **Auditoria y publicacion (Fase 33, 18-11-2026).** El repositorio de origen no se publica; la version publica (rama `publico`, un
-   solo commit) esta subida al repositorio nuevo, todavia privado (W.8). La primera limpieza del arbol esta hecha (PLAN, Fase 33,
+   solo commit de partida) esta en el repositorio nuevo, publico desde el 19-11-2026 UTC y con sus protecciones activas (W.10). La primera limpieza del arbol esta hecha (PLAN, Fase 33,
    "Limpieza"). Mateo decide como se publica (repositorio nuevo con historia nueva y autor `noreply`, recomendado; el actual se renombra y
    se deja privado), lo que queda de "Conviene" (el `sub` en el video, `docs/superpowers/`, la licencia) y su postura sobre el operador
    (pista 1). Mateo, con su sesion y en solo lectura (Claude puede hacerlo con su si): las cuatro comprobaciones de la cuenta que resuelven
