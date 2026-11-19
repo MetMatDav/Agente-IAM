@@ -2250,5 +2250,27 @@ Sobre el arbol que va a la rama `publico` (177 ficheros versionados, 170 de text
 - La rama `publico` es un solo commit sin padres con el mismo arbol que el commit de la rama de trabajo; autor y committer llevan la
   direccion `noreply` de GitHub. La historia anterior no forma parte de ella.
 
-Sin medir: nada de esto esta en GitHub. Al subirla hay que repetir la comprobacion alli (un commit, autor, sin refs de PR ni artefactos).
+La comprobacion en GitHub, una vez subida, esta en W.8.
+
+### W.8 Repositorio nuevo en GitHub (19-11-2026 UTC, `gh` y `git`, con el si de Mateo)
+
+Medido contra GitHub, no contra la cuenta AWS.
+
+- **Antes de crear nada:** el repositorio de origen ya se llamaba `Agente-IAM-privado` (lo renombro Mateo). El remoto `origin` local, que
+  seguia con el nombre viejo, se apunto a el; responde con sus dos ramas.
+- **Creacion y subida:** `MetMatDav/Agente-IAM` creado en privado a las 04:34 UTC y subida solo la rama `publico` como `main`.
+- **Lo que sirve GitHub (clon en espejo):** una ref (`refs/heads/main`), un commit alcanzable y un solo objeto commit en total, sin padres,
+  con autor y committer en la direccion `noreply`; 177 ficheros; la cuenta real no aparece en ningun objeto, ningun commit lleva el correo
+  personal y lo quitado en la limpieza no reaparece. Sin PR y sin mas ramas.
+- **Protecciones, las tres rechazadas por ser privado:** secret scanning (`422`, "not available for this repository"), proteccion de la rama
+  `main` (`403`, pide GitHub Pro o repositorio publico) y aprobacion de PR de forks (`422`, "not allowed for private repositories"). Hay que
+  activarlas al pasar a publico.
+- **Primera ejecucion del CI alli:** `unitarios` en `success`; `seguridad` en `failure`. Dentro de `seguridad`: gitleaks `success`, pytest,
+  bandit y cfn-lint con salida 0, y pip-audit con salida 1 por una vulnerabilidad conocida en `opentelemetry-api` 1.45.1 (`CVE-2026-126360`,
+  arreglada en 1.45.2). En `constraints.txt` la fijan con `==` `opentelemetry-sdk` y `opentelemetry-semantic-conventions`: hay que subirlos
+  juntos. La ultima ejecucion en el repositorio de origen (02-11-2026) no la daba: es un aviso publicado despues.
+- **Despues de esta medicion:** esta misma anotacion se sube al repositorio nuevo como un segundo commit normal sobre el primero (mismo
+  autor `noreply`, sin forzar): desde entonces la rama `main` de alli tiene dos commits, y ninguno viene de la historia de origen.
+- **Sin medir:** que el aviso de pip-audit afecte de verdad al uso que hace el proyecto de esa libreria; y las protecciones, que no existen
+  todavia.
 

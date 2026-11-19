@@ -1559,7 +1559,8 @@ Lo que no se arreglo:
 - Pista 2 (escrituras que configuran entrega): cambia `ACCIONES_PROHIBIDAS` y regenera el techo, que hay que desplegar. Pendiente.
 - Pista 1 (operador): es rediseno de los limites por rol. Pendiente de la postura de Mateo.
 
-**Publicacion (18-11-2026, preparada en local; nada subido).** Mateo decidio publicar con historia nueva. Queda preparada la rama `publico`:
+**Publicacion (rama preparada el 18-11-2026; subida a un repositorio nuevo, todavia privado, el 19-11-2026 UTC).** Mateo decidio publicar con
+historia nueva. Queda preparada la rama `publico`:
 un solo commit sin padres, hecho con `git commit-tree` sobre el mismo arbol que la rama de trabajo, con autor y committer en la direccion
 `noreply` de GitHub. Para eso se anadio la licencia MIT (`LICENSE`, decision de Claude por delegacion de Mateo; se puede cambiar antes de
 subir), una nota en el README y en este plan de que los hashes de commit citados son del repositorio privado de origen, y se enmascaro el id
@@ -1568,11 +1569,24 @@ real del runtime de AgentCore en cuatro documentos. Las busquedas de W.1 se repi
 asistente; el usuario IAM `Mateo` nombrado en los documentos; y el video, donde se lee el `sub` de un usuario de demostracion (ya publico
 en LinkedIn).
 
+Subida (19-11-2026 UTC, con el si de Mateo; `docs/MEDICIONES.md` W.8). Mateo renombro el repositorio de origen a `Agente-IAM-privado`. El
+remoto `origin` de la copia local se apunto a ese nombre antes de crear nada, porque con el nombre viejo un `git push` de la rama de trabajo
+habria subido la historia antigua al repositorio nuevo. Se creo `MetMatDav/Agente-IAM` en privado y se subio solo la rama `publico`, como
+`main`, por un remoto aparte (`publico`) configurado para empujar solo esa rama. Un clon en espejo del repositorio nuevo da un commit, sin
+la cuenta real ni el correo personal. Dos cosas no salieron: las tres protecciones (secret scanning, proteccion de `main` y aprobacion de PR
+de forks) no se pueden activar mientras el repositorio es privado, y la primera ejecucion del CI alli fallo en `seguridad` porque pip-audit
+encontro una vulnerabilidad conocida en una dependencia (`opentelemetry-api` 1.45.1, arreglada en 1.45.2); gitleaks, los tests, bandit y
+cfn-lint pasaron.
+
 Pendiente (quien):
-- Mateo: en GitHub, activar el correo `noreply` y el bloqueo de pushes que exponen el correo; renombrar el repositorio actual y dejarlo
-  privado (no se borra hasta comprobar el nuevo); y dar el si para crear el repositorio nuevo y subir la rama `publico`.
-- Claude, con ese si: crear el repositorio nuevo en privado, subir `publico` como `main`, activar secret scanning, reglas de rama y aprobacion
-  de PR de forks, y comprobarlo. El paso a publico es de Mateo.
+- Mateo: en GitHub, activar el correo `noreply` y el bloqueo de pushes que exponen el correo; y, cuando lo decida, pasar el repositorio
+  nuevo a publico. El de origen (`Agente-IAM-privado`) no se borra hasta comprobar el nuevo.
+- Claude, justo despues del paso a publico: activar secret scanning con push protection, la proteccion de `main` con los checks `unitarios`
+  y `seguridad`, y la aprobacion de PR de forks; hoy GitHub las rechaza por ser privado.
+- Claude, cuando Mateo lo pida: subir `opentelemetry-api` y los paquetes que lo fijan (`opentelemetry-sdk`, `opentelemetry-semantic-conventions`
+  y las dos instrumentaciones) en `constraints.txt`, reinstalar, correr la suite y `pip-audit`. Afecta al zip del runtime.
+- Claude: llevar cada cambio de la rama de trabajo a `publico` con un commit normal encima (mismo arbol, autor `noreply`, sin forzar la
+  subida), hasta que se trabaje directamente sobre el repositorio nuevo.
 - Mateo: decidir lo que queda de "Conviene": el `sub` visible en el video de 0:30 a 0:39, `docs/superpowers/` y cuanto del trabajo con el
   asistente se ve, el usuario IAM `Mateo` nombrado en los documentos, la nota del envio a AWS Support y la licencia.
 - Mateo: su postura sobre el operador (pista 1): si la autoridad del operador sobre los roles y el codigo es una limitacion aceptada o se

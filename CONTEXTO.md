@@ -25,9 +25,10 @@ y pruebas de AgentCore); `docs/arquitectura/GUIA-VISUAL.md` (diagramas y animaci
   siguiente, en este orden: tapar el `sub` en el video, las pistas 2 y 4 (codigo mas despliegue, Claude, cuando Mateo lo pida), las
   decisiones de Mateo (licencia, cuanto del trabajo con el asistente se ve, su postura sobre el operador), el despliegue de lo arreglado
   (operador, con el si de Mateo; `docs/DESPLIEGUE.md`) y el repositorio publico nuevo con un solo commit. La Fase 33 esta en `06b3785`
-  (18-11-2026, rama `docs/fase-9-y-gitignore`, sin subir a GitHub). La version publica esta preparada en local: rama `publico`, un
-  solo commit con autor `noreply` y licencia MIT (PLAN, Fase 33, "Publicacion"); falta crear el repositorio nuevo y subirla, con el si
-  de Mateo.
+  (18-11-2026, rama `docs/fase-9-y-gitignore`, sin subir a GitHub). La version publica (rama `publico`, un solo commit con autor `noreply` y licencia
+  MIT) esta subida desde el 19-11-2026 UTC al repositorio nuevo `MetMatDav/Agente-IAM`, todavia privado; el de origen se llama ahora
+  `Agente-IAM-privado` y es el remoto `origin` (PLAN, Fase 33, "Publicacion"; `docs/MEDICIONES.md` W.8). Falta: que Mateo lo pase a
+  publico, activar entonces las tres protecciones, y arreglar el aviso de pip-audit sobre `opentelemetry-api` que deja en rojo el CI.
 
 **Anterior (02-11-2026 UTC)**
 
@@ -1034,7 +1035,7 @@ pida. Lo hecho vive en `PLAN-CORRECCIONES.md` y en `docs/MEDICIONES.md`.
    asignar/crear (los permisos con caducidad son el bloque 1 de la Fase 23, desplegado el 26-10-2026).
 5. **Video de demostracion (Fase 32) hecho el 02-11-2026** en `portafolio/demo-agente-iam-es.mp4`; publicarlo en LinkedIn (Mateo).
 6. **Auditoria y publicacion (Fase 33, 18-11-2026).** El repositorio de origen no se publica; la version publica (rama `publico`, un
-   solo commit) esta preparada en local. La primera limpieza del arbol esta hecha (PLAN, Fase 33,
+   solo commit) esta subida al repositorio nuevo, todavia privado (W.8). La primera limpieza del arbol esta hecha (PLAN, Fase 33,
    "Limpieza"). Mateo decide como se publica (repositorio nuevo con historia nueva y autor `noreply`, recomendado; el actual se renombra y
    se deja privado), lo que queda de "Conviene" (el `sub` en el video, `docs/superpowers/`, la licencia) y su postura sobre el operador
    (pista 1). Mateo, con su sesion y en solo lectura (Claude puede hacerlo con su si): las cuatro comprobaciones de la cuenta que resuelven
