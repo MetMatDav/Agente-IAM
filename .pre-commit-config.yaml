@@ -1,0 +1,29 @@
+# Barrera antes del commit. Instalacion (una vez):
+#   ./.venv/bin/pip install pre-commit && ./.venv/bin/pre-commit install
+repos:
+  # rev por commit, no por etiqueta (24-10-2026, S10): una etiqueta se puede
+  # mover a otro codigo. Es el commit de v8.21.2, comprobado con
+  # `git ls-remote https://github.com/gitleaks/gitleaks 'refs/tags/v8.21.2*'`
+  # (la etiqueta es anotada: el commit es el de `v8.21.2^{}`).
+  # El hook (`gitleaks protect --staged`) solo mira lo que va a entrar en el
+  # commit; el historial lo escanea el CI con `gitleaks git` (O1).
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: 43fae355e6fe4d99d2a7b240a224b85e2903aeb4  # frozen: v8.21.2
+    hooks:
+      - id: gitleaks
+  - repo: local
+    hooks:
+      # ruff (Fase 13): errores sin ejecutar el codigo, en menos de un segundo.
+      - id: ruff
+        name: ruff (errores sin ejecutar)
+        entry: ./.venv/bin/ruff check .
+        language: system
+        pass_filenames: false
+      # Unitarios y seguridad enteros (unos 12 s y 656 tests el 24-10-2026;
+      # eran 4 s cuando se escribio); los funcionales nunca.
+      # Sin evidencia: un informe por commit solo llenaria el disco.
+      - id: tests-unitarios-y-seguridad
+        name: tests unitarios y de seguridad
+        entry: ./.venv/bin/python -m pytest tests/unitarios tests/seguridad -q
+        language: system
+        pass_filenames: false

@@ -1,0 +1,11 @@
+{
+  "solicitud_id": "req-012-jose",
+  "principal_arn_declarado": "arn:aws:iam::111122223333:role/app-finanzas-demo",
+  "campos": {
+    "servicio": "s3",
+    "recurso": "finanzas-demo-111122223333",
+    "tipo_acceso": "lectura",
+    "region": "us-east-1"
+  },
+  "justificacion": "La aplicacion de finanzas ya lee los informes del bucket de demo para el cierre mensual; pedimos lo mismo otra vez por si falta algo."
+}

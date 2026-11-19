@@ -1,0 +1,16 @@
+# Dependencias de la Lambda del aplicador (agente-iam-aplicador).
+# El paquete lo construye `scripts/empaquetar.sh aplicador`, compilado para
+# aarch64 como el del runtime y el de la aprobacion.
+#
+# Son las mismas cuatro lineas que requirements-aprobacion.txt, y por la misma
+# razon: es requirements.txt sin `bedrock-agentcore`, que solo usa
+# `servidor.py`, y la Lambda no lo lleva. strands-agents entra por
+# `catalogo.py` y `validacion.py` (la decoracion `@tool`) a traves de
+# `aprobar.py`, del que el aplicador importa; boto3 y botocore por
+# `aplicador.py` y `almacen.py`; pydantic por `models.py`. Mismas versiones que
+# requirements.txt y constraints.txt; lo vigila tests/seguridad/test_ci.py.
+
+strands-agents==1.54.0
+boto3==1.43.82
+pydantic==2.13.4
+botocore==1.43.82

@@ -1,0 +1,30 @@
+# Dependencias solo de desarrollo. Instalar, siempre con las restricciones:
+#   ./.venv/bin/pip install -r requirements.txt -r requirements-dev.txt -c constraints.txt
+# Versiones fijadas (22-10-2026): el CI de GitHub instala esto mismo, y una
+# herramienta que cambia sola cambia lo que se comprueba.
+pytest==9.1.1
+# Barrera de secretos antes de cada commit (ver .pre-commit-config.yaml).
+# Tras instalar: ./.venv/bin/pre-commit install
+pre-commit==4.7.0
+# Seguridad (Fase 12), los corre scripts/pruebas.sh seguridad:
+#   bandit     analisis estatico del codigo Python (SAST)
+#   pip-audit  dependencias con vulnerabilidades conocidas
+bandit==1.9.4
+pip-audit==2.10.1
+# Analisis estatico de correccion (Fase 13), los corre scripts/pruebas.sh unitarios:
+#   ruff  errores sin ejecutar: nombres sin definir, imports sin usar, trampas
+#   mypy  comprueba las anotaciones de tipo
+ruff==0.16.10
+mypy==2.4.0
+# Plantillas de CloudFormation (Fase 15): cfn-lint valida infra/cfn/*.yaml
+# contra las especificaciones de recursos. jsonpatch y jsonpointer van fijados
+# en constraints.txt a versiones anteriores: las ultimas tenian 4 dias el
+# 23-10-2026 y la regla es no instalar nada con menos de dos semanas.
+cfn-lint==1.57.2
+# PyYAML lo importan scripts/generar_techo.py y los tests de plantillas y del
+# CI. Llegaba por pre-commit y cfn-lint; se declara porque se usa (24-10-2026,
+# revision O17).
+PyYAML==6.0.3
+# packaging lo usa test_ci.py para evaluar los marcadores de cada dependencia
+# al recorrer el arbol (24-10-2026). Llegaba por pytest y otros.
+packaging==26.3

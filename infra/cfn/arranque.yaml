@@ -1,0 +1,1103 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Agente IAM - pila de arranque de la cuenta agente-iam. La despliega el
+  administrador una sola vez: el rol con el que CloudFormation crea todo lo
+  demas, el limite de los roles del sistema y el techo de los beneficiarios.
+
+# Por que existe (Fase 15, bloque 3, 23-10-2026; diseno aprobado por Mateo,
+# PLAN-CORRECCIONES.md). Aqui va lo que, si cambiara, permitiria ampliar
+# permisos. Por eso:
+#   - La despliega el ADMINISTRADOR, no el operador: el permission set
+#     AgenteIAM-Operador tiene un Deny explicito sobre esta pila (probado
+#     con el simulador de IAM el 23-10-2026).
+#   - Se crea con proteccion contra borrado (--enable-termination-protection).
+#
+# Tres piezas:
+#   AgenteIAM-Despliegue     rol de servicio de CloudFormation. El operador
+#                            solo despliega pasandolo (cloudformation:RoleArn).
+#   AgenteIAM-LimiteSistema  permissions boundary OBLIGATORIO de todo rol que
+#                            cree AgenteIAM-Despliegue (runtime, aplicador).
+#                            No es el techo: el aplicador necesita
+#                            iam:CreatePolicy, que un beneficiario nunca debe
+#                            tener. Correccion del 23-10-2026 a lo dicho en
+#                            el diseno ("con el techo como boundary").
+#   AgenteIAM-Techo          boundary de los BENEFICIARIOS: lo maximo que el
+#                            aplicador puede conceder. Copia tal cual de
+#                            infra/boundary-agente-iam-techo.json; las dos
+#                            las escribe scripts/generar_techo.py (v2,
+#                            ADR-002, 23-10-2026).
+#
+# DE DONDE SALEN LOS PERMISOS DE AgenteIAM-Despliegue. Las acciones de las
+# politicas Almacen, Cognito y Computo NO estan escritas a mano: salen de los
+# esquemas de los 16 tipos de recurso que usaran las pilas base, acceso y
+# runtime (`aws cloudformation describe-type`, handlers create, read,
+# update, delete y list), leidos el 23-10-2026. Se quitaron:
+#   - servicios de funciones que no se usan: s3tables, vpc-lattice, kinesis,
+#     firehose, elasticfilesystem, organizations, cloudfront (dominio propio
+#     de Cognito), ec2 (Lambda sin VPC), kms (sin claves propias);
+#   - nombres que la referencia de autorizacion de IAM no reconoce (son
+#     nombres de API, no acciones de IAM);
+#   - de Logs, las que tocan politicas de toda la cuenta: PutResourcePolicy,
+#     DeleteResourcePolicy, CreateLogDelivery y las de indices.
+# Cada accion va limitada a los recursos del proyecto (agente-iam-*,
+# AgenteIAM-*), salvo las que la referencia de autorizacion solo admite con
+# Resource "*". IAM si esta escrito a mano: es la parte que decide si alguien
+# puede escalar.
+#
+# Si un despliegue futuro falla con AccessDenied, la accion que falta se
+# anade aqui, despues de mirar por que hace falta. Nunca un service:* .
+#
+# Sin etiquetas cortas: la lee yaml.safe_load en los tests.
+# Generada con un script a partir de los esquemas; el script y los esquemas
+# no se versionan (son de la sesion), el resultado si.
+
+Resources:
+  # --- El rol de despliegue ----------------------------------------------------
+
+  RolDespliegue:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: AgenteIAM-Despliegue
+      Description: Rol de servicio de CloudFormation para las pilas agente-iam-*. Solo lo usa CloudFormation.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SoloCloudFormationDeEstaCuenta
+            Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+            # La guia solo documenta aws:SourceAccount para extensiones del
+            # registro; medido el 24-10-2026 con el primer despliegue del
+            # operador (pila agente-iam-base): CloudFormation asume el rol
+            # con esta condicion sin error (MEDICIONES F.5).
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  Ref: AWS::AccountId
+      ManagedPolicyArns:
+        - Ref: PoliticaAlmacen
+        - Ref: PoliticaCognito
+        - Ref: PoliticaComputo
+        - Ref: PoliticaIdentidad
+        - Ref: PoliticaBarreras
+
+  PoliticaAlmacen:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: AgenteIAM-Despliegue-Almacen
+      Description: S3, DynamoDB, SQS y SNS del proyecto, segun los esquemas de recursos de CloudFormation.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: S3SoloRecursosDelProyecto
+            Effect: Allow
+            Action:
+              - s3:CreateBucket
+              - s3:CreateBucketMetadataTableConfiguration
+              - s3:DeleteBucket
+              - s3:DeleteBucketMetadataTableConfiguration
+              - s3:DeleteBucketPolicy
+              - s3:DeleteBucketWebsite
+              - s3:DeleteObject
+              - s3:GetAccelerateConfiguration
+              - s3:GetAnalyticsConfiguration
+              - s3:GetBucketAbac
+              - s3:GetBucketAcl
+              - s3:GetBucketCORS
+              - s3:GetBucketLogging
+              - s3:GetBucketMetadataTableConfiguration
+              - s3:GetBucketNotification
+              - s3:GetBucketObjectLockConfiguration
+              - s3:GetBucketOwnershipControls
+              - s3:GetBucketPolicy
+              - s3:GetBucketPublicAccessBlock
+              - s3:GetBucketTagging
+              - s3:GetBucketVersioning
+              - s3:GetBucketWebsite
+              - s3:GetEncryptionConfiguration
+              - s3:GetIntelligentTieringConfiguration
+              - s3:GetInventoryConfiguration
+              - s3:GetLifecycleConfiguration
+              - s3:GetMetricsConfiguration
+              - s3:GetObject
+              - s3:GetObjectVersion
+              - s3:GetReplicationConfiguration
+              - s3:ListBucket
+              - s3:ListTagsForResource
+              - s3:PutAccelerateConfiguration
+              - s3:PutAnalyticsConfiguration
+              - s3:PutBucketAbac
+              - s3:PutBucketAcl
+              - s3:PutBucketCORS
+              - s3:PutBucketLogging
+              - s3:PutBucketNotification
+              - s3:PutBucketObjectLockConfiguration
+              - s3:PutBucketOwnershipControls
+              - s3:PutBucketPolicy
+              - s3:PutBucketPublicAccessBlock
+              - s3:PutBucketTagging
+              - s3:PutBucketVersioning
+              - s3:PutBucketWebsite
+              - s3:PutEncryptionConfiguration
+              - s3:PutIntelligentTieringConfiguration
+              - s3:PutInventoryConfiguration
+              - s3:PutLifecycleConfiguration
+              - s3:PutMetricsConfiguration
+              - s3:PutObjectAcl
+              - s3:PutReplicationConfiguration
+              - s3:TagResource
+              - s3:UntagResource
+              - s3:UpdateBucketMetadataAnnotationTableConfiguration
+              - s3:UpdateBucketMetadataInventoryTableConfiguration
+              - s3:UpdateBucketMetadataJournalTableConfiguration
+            Resource:
+              - "arn:aws:s3:::agente-iam-*"
+          - Sid: S3SinTipoDeRecurso
+            Effect: Allow
+            Action:
+              - s3:ListAllMyBuckets
+            Resource: "*"
+          - Sid: DynamodbSoloRecursosDelProyecto
+            Effect: Allow
+            Action:
+              - dynamodb:AssociateTableReplica
+              - dynamodb:BatchWriteItem
+              - dynamodb:CreateTable
+              - dynamodb:CreateTableReplica
+              - dynamodb:DeleteItem
+              - dynamodb:DeleteResourcePolicy
+              - dynamodb:DeleteTable
+              - dynamodb:DescribeContinuousBackups
+              - dynamodb:DescribeContributorInsights
+              - dynamodb:DescribeImport
+              - dynamodb:DescribeKinesisStreamingDestination
+              - dynamodb:DescribeTable
+              - dynamodb:DescribeTimeToLive
+              - dynamodb:DisableKinesisStreamingDestination
+              - dynamodb:EnableKinesisStreamingDestination
+              - dynamodb:GetItem
+              - dynamodb:GetResourcePolicy
+              - dynamodb:ImportTable
+              - dynamodb:ListTagsOfResource
+              - dynamodb:PutItem
+              - dynamodb:PutResourcePolicy
+              - dynamodb:Query
+              - dynamodb:Scan
+              - dynamodb:TagResource
+              - dynamodb:UntagResource
+              - dynamodb:UpdateContinuousBackups
+              - dynamodb:UpdateContributorInsights
+              - dynamodb:UpdateItem
+              - dynamodb:UpdateKinesisStreamingDestination
+              - dynamodb:UpdateTable
+              - dynamodb:UpdateTimeToLive
+            Resource:
+              - Fn::Sub: "arn:aws:dynamodb:us-east-1:${AWS::AccountId}:table/agente-iam-*"
+          - Sid: DynamodbSinTipoDeRecurso
+            Effect: Allow
+            Action:
+              - dynamodb:ListTables
+            Resource: "*"
+          - Sid: SqsSoloRecursosDelProyecto
+            Effect: Allow
+            Action:
+              - sqs:CreateQueue
+              - sqs:DeleteQueue
+              - sqs:GetQueueAttributes
+              - sqs:GetQueueUrl
+              - sqs:ListQueueTags
+              - sqs:SetQueueAttributes
+              - sqs:TagQueue
+              - sqs:UntagQueue
+            Resource:
+              - Fn::Sub: "arn:aws:sqs:us-east-1:${AWS::AccountId}:agente-iam-*"
+          - Sid: SqsSinTipoDeRecurso
+            Effect: Allow
+            Action:
+              - sqs:ListQueues
+            Resource: "*"
+          - Sid: SnsSoloRecursosDelProyecto
+            Effect: Allow
+            Action:
+              - sns:CreateTopic
+              - sns:DeleteTopic
+              - sns:GetDataProtectionPolicy
+              - sns:GetTopicAttributes
+              - sns:ListSubscriptionsByTopic
+              - sns:ListTagsForResource
+              - sns:PutDataProtectionPolicy
+              - sns:SetTopicAttributes
+              - sns:Subscribe
+              - sns:TagResource
+              - sns:Unsubscribe
+              - sns:UntagResource
+            Resource:
+              - Fn::Sub: "arn:aws:sns:us-east-1:${AWS::AccountId}:agente-iam-*"
+          - Sid: SnsSinTipoDeRecurso
+            Effect: Allow
+            Action:
+              - sns:ListTopics
+            Resource: "*"
+
+  PoliticaCognito:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: AgenteIAM-Despliegue-Cognito
+      Description: User pool, dominio, proveedor SAML y cliente, segun los esquemas de recursos de CloudFormation.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: CognitoIdpSoloRecursosDelProyecto
+            Effect: Allow
+            Action:
+              - cognito-idp:AddCustomAttributes
+              - cognito-idp:CreateIdentityProvider
+              - cognito-idp:CreateUserPoolClient
+              - cognito-idp:CreateUserPoolDomain
+              - cognito-idp:DeleteIdentityProvider
+              - cognito-idp:DeleteUserPool
+              - cognito-idp:DeleteUserPoolClient
+              - cognito-idp:DeleteUserPoolDomain
+              - cognito-idp:DescribeIdentityProvider
+              - cognito-idp:DescribeUserPool
+              - cognito-idp:DescribeUserPoolClient
+              - cognito-idp:GetUserPoolMfaConfig
+              - cognito-idp:ListIdentityProviders
+              - cognito-idp:ListTagsForResource
+              - cognito-idp:ListUserPoolClientSecrets
+              - cognito-idp:ListUserPoolClients
+              - cognito-idp:SetUserPoolMfaConfig
+              - cognito-idp:TagResource
+              - cognito-idp:UntagResource
+              - cognito-idp:UpdateIdentityProvider
+              - cognito-idp:UpdateUserPool
+              - cognito-idp:UpdateUserPoolClient
+              - cognito-idp:UpdateUserPoolDomain
+            Resource:
+              - Fn::Sub: "arn:aws:cognito-idp:us-east-1:${AWS::AccountId}:userpool/*"
+          - Sid: CognitoIdpSinTipoDeRecurso
+            Effect: Allow
+            Action:
+              - cognito-idp:CreateUserPool
+              - cognito-idp:DescribeUserPoolDomain
+              - cognito-idp:ListUserPools
+            Resource: "*"
+
+  PoliticaComputo:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: AgenteIAM-Despliegue-Computo
+      Description: Runtime de AgentCore, Lambda, logs, trail y alarmas del proyecto, segun los esquemas de recursos.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: BedrockAgentcoreSoloRecursosDelProyecto
+            Effect: Allow
+            Action:
+              - bedrock-agentcore:CreateAgentRuntimeEndpoint
+              - bedrock-agentcore:CreateWorkloadIdentity
+              - bedrock-agentcore:DeleteAgentRuntime
+              - bedrock-agentcore:DeleteAgentRuntimeEndpoint
+              - bedrock-agentcore:DeleteWorkloadIdentity
+              - bedrock-agentcore:GetAgentRuntime
+              - bedrock-agentcore:GetAgentRuntimeEndpoint
+              - bedrock-agentcore:ListTagsForResource
+              - bedrock-agentcore:PassCapacityProvider
+              - bedrock-agentcore:TagResource
+              - bedrock-agentcore:UntagResource
+              - bedrock-agentcore:UpdateAgentRuntime
+              - bedrock-agentcore:UpdateAgentRuntimeEndpoint
+            Resource:
+              - Fn::Sub: "arn:aws:bedrock-agentcore:us-east-1:${AWS::AccountId}:*"
+          - Sid: BedrockAgentcoreSinTipoDeRecurso
+            Effect: Allow
+            Action:
+              - bedrock-agentcore:CreateAgentRuntime
+              - bedrock-agentcore:ListAgentRuntimeEndpoints
+              - bedrock-agentcore:ListAgentRuntimes
+            Resource: "*"
+          - Sid: LambdaSoloRecursosDelProyecto
+            Effect: Allow
+            Action:
+              - lambda:CreateFunction
+              # Las cuatro *FunctionUrlConfig y ListFunctionUrlConfigs son los
+              # permisos de los cinco manejadores de AWS::Lambda::Url (ADR-003),
+              # leidos del esquema real con cloudformation:DescribeType el
+              # 24-10-2026 (docs/MEDICIONES.md F.7). Nada de lambda:AddPermission.
+              - lambda:CreateFunctionUrlConfig
+              - lambda:DeleteEventSourceMapping
+              - lambda:DeleteFunction
+              - lambda:DeleteFunctionCodeSigningConfig
+              - lambda:DeleteFunctionConcurrency
+              - lambda:DeleteFunctionUrlConfig
+              - lambda:GetCodeSigningConfig
+              - lambda:GetEventSourceMapping
+              - lambda:GetFunction
+              - lambda:GetFunctionCodeSigningConfig
+              - lambda:GetFunctionRecursionConfig
+              - lambda:GetFunctionScalingConfig
+              - lambda:GetFunctionUrlConfig
+              - lambda:GetLayerVersion
+              - lambda:GetRuntimeManagementConfig
+              - lambda:ListFunctionUrlConfigs
+              - lambda:ListTags
+              - lambda:PassCapacityProvider
+              - lambda:PublishVersion
+              - lambda:PutFunctionCodeSigningConfig
+              - lambda:PutFunctionConcurrency
+              - lambda:PutFunctionRecursionConfig
+              - lambda:PutFunctionScalingConfig
+              - lambda:PutRuntimeManagementConfig
+              - lambda:TagResource
+              - lambda:UntagResource
+              - lambda:UpdateEventSourceMapping
+              - lambda:UpdateFunctionCode
+              - lambda:UpdateFunctionConfiguration
+              - lambda:UpdateFunctionUrlConfig
+            Resource:
+              - Fn::Sub: "arn:aws:lambda:us-east-1:${AWS::AccountId}:function:agente-iam-*"
+              - Fn::Sub: "arn:aws:lambda:us-east-1:${AWS::AccountId}:event-source-mapping:*"
+          - Sid: LambdaSinTipoDeRecurso
+            Effect: Allow
+            Action:
+              - lambda:CreateEventSourceMapping
+              - lambda:ListEventSourceMappings
+              - lambda:ListFunctions
+            Resource: "*"
+          - Sid: LogsSoloRecursosDelProyecto
+            Effect: Allow
+            Action:
+              - logs:AssociateKmsKey
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:DeleteDataProtectionPolicy
+              - logs:DeleteLogGroup
+              - logs:DeleteRetentionPolicy
+              - logs:DescribeLogStreams
+              - logs:DisassociateKmsKey
+              - logs:GetDataProtectionPolicy
+              - logs:ListTagsForResource
+              - logs:PutBearerTokenAuthentication
+              - logs:PutDataProtectionPolicy
+              - logs:PutLogEvents
+              - logs:PutLogGroupDeletionProtection
+              - logs:PutRetentionPolicy
+              - logs:TagResource
+              - logs:UntagResource
+            Resource:
+              - Fn::Sub: "arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/agente_iam*"
+              - Fn::Sub: "arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/aws/lambda/agente-iam-*"
+              - Fn::Sub: "arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:agente-iam-*"
+          - Sid: LogsSinTipoDeRecurso
+            Effect: Allow
+            Action:
+              - logs:DescribeIndexPolicies
+              - logs:DescribeLogGroups
+              - logs:DescribeResourcePolicies
+            Resource: "*"
+          - Sid: CloudtrailSoloRecursosDelProyecto
+            Effect: Allow
+            Action:
+              - cloudtrail:AddTags
+              - cloudtrail:CreateTrail
+              - cloudtrail:DeleteTrail
+              - cloudtrail:GetEventConfiguration
+              - cloudtrail:GetEventSelectors
+              - cloudtrail:GetInsightSelectors
+              - cloudtrail:GetTrail
+              - cloudtrail:GetTrailStatus
+              - cloudtrail:ListTags
+              - cloudtrail:PutEventConfiguration
+              - cloudtrail:PutEventSelectors
+              - cloudtrail:PutInsightSelectors
+              - cloudtrail:RemoveTags
+              - cloudtrail:StartLogging
+              - cloudtrail:StopLogging
+              - cloudtrail:UpdateTrail
+            Resource:
+              - Fn::Sub: "arn:aws:cloudtrail:us-east-1:${AWS::AccountId}:trail/agente-iam-*"
+          - Sid: CloudtrailSinTipoDeRecurso
+            Effect: Allow
+            Action:
+              - cloudtrail:DescribeTrails
+              - cloudtrail:ListTrails
+            Resource: "*"
+          - Sid: CloudwatchSoloRecursosDelProyecto
+            Effect: Allow
+            Action:
+              - cloudwatch:DeleteAlarms
+              - cloudwatch:DescribeAlarms
+              - cloudwatch:ListTagsForResource
+              - cloudwatch:PutMetricAlarm
+              - cloudwatch:TagResource
+              - cloudwatch:UntagResource
+            Resource:
+              - Fn::Sub: "arn:aws:cloudwatch:us-east-1:${AWS::AccountId}:alarm:agente-iam-*"
+          # Fase 23, bloque 2 (la pila web: S3 privado tras CloudFront con OAC y
+          # cabeceras de seguridad). Entra ahora, en el mismo change set de
+          # arranque, para que el administrador despliegue esta pila una sola
+          # vez (CLAUDE.md del proyecto: lo que amplia permisos lo hace el
+          # administrador). Solo los tres tipos de recurso de la pila: la
+          # distribucion, el control de acceso al origen y la politica de
+          # cabeceras, todos de esta cuenta; ninguna accion con Resource "*".
+          # La lista sale de los manejadores de esos tipos y falta contrastarla
+          # con la referencia de autorizacion antes del change set (tarea 12);
+          # lo que falte lo dira el primer despliegue de web.yaml.
+          # Sin tipo de recurso (referencia de autorizacion leida el 26-10-2026):
+          # las tres Create (la distribucion, el control de acceso de origen y la
+          # politica de cabeceras nacen sin ARN) y las List que piden los
+          # manejadores de CloudFormation (DescribeType, 26-10-2026). Con un ARN
+          # acotado se denegarian siempre. CreateDistributionWithTags, que tambien
+          # lista el manejador, ya no es una accion de IAM (referencia y cfn-lint).
+          - Sid: CloudFrontSinTipoDeRecurso
+            Effect: Allow
+            Action:
+              - cloudfront:CreateDistribution
+              - cloudfront:CreateOriginAccessControl
+              - cloudfront:CreateResponseHeadersPolicy
+              - cloudfront:ListDistributions
+              - cloudfront:ListOriginAccessControls
+              - cloudfront:ListResponseHeadersPolicies
+            Resource: "*"
+          - Sid: CloudFrontSoloRecursosDelProyecto
+            Effect: Allow
+            Action:
+              - cloudfront:UpdateDistribution
+              - cloudfront:DeleteDistribution
+              - cloudfront:GetDistribution
+              - cloudfront:GetDistributionConfig
+              - cloudfront:TagResource
+              - cloudfront:UntagResource
+              - cloudfront:ListTagsForResource
+              - cloudfront:GetOriginAccessControl
+              - cloudfront:GetOriginAccessControlConfig
+              - cloudfront:UpdateOriginAccessControl
+              - cloudfront:DeleteOriginAccessControl
+              - cloudfront:GetResponseHeadersPolicy
+              - cloudfront:GetResponseHeadersPolicyConfig
+              - cloudfront:UpdateResponseHeadersPolicy
+              - cloudfront:DeleteResponseHeadersPolicy
+            Resource:
+              - Fn::Sub: "arn:aws:cloudfront::${AWS::AccountId}:distribution/*"
+              - Fn::Sub: "arn:aws:cloudfront::${AWS::AccountId}:origin-access-control/*"
+              - Fn::Sub: "arn:aws:cloudfront::${AWS::AccountId}:response-headers-policy/*"
+
+  # IAM a mano: es donde se decide si se puede escalar.
+  PoliticaIdentidad:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: AgenteIAM-Despliegue-Identidad
+      Description: Crear y mantener los roles AgenteIAM-* del sistema, siempre con AgenteIAM-LimiteSistema como boundary.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: CrearRolesSoloConElLimiteDelSistema
+            Effect: Allow
+            Action:
+              - iam:CreateRole
+              - iam:PutRolePermissionsBoundary
+            Resource:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/AgenteIAM-*
+            Condition:
+              StringEquals:
+                iam:PermissionsBoundary:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AgenteIAM-LimiteSistema
+          - Sid: MantenerLosRolesDelSistema
+            Effect: Allow
+            Action:
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+              - iam:PutRolePolicy
+              - iam:DeleteRolePolicy
+              - iam:DeleteRole
+              - iam:TagRole
+              - iam:UntagRole
+              - iam:UpdateRole
+              - iam:UpdateRoleDescription
+              - iam:UpdateAssumeRolePolicy
+              - iam:GetRole
+              - iam:GetRolePolicy
+              - iam:ListAttachedRolePolicies
+              - iam:ListRolePolicies
+            Resource:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/AgenteIAM-*
+          - Sid: ListarRolesNoTieneRecurso
+            Effect: Allow
+            Action: iam:ListRoles
+            Resource: "*"
+          # Solo el rol vinculado de identidad del runtime de AgentCore: lo
+          # creo el runtime de la Prueba B (23-10-2026, 05:59:58 UTC).
+          - Sid: SoloElRolVinculadoDeAgentCore
+            Effect: Allow
+            Action: iam:CreateServiceLinkedRole
+            Resource:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/aws-service-role/runtime-identity.bedrock-agentcore.amazonaws.com/*
+            Condition:
+              StringEquals:
+                iam:AWSServiceName: runtime-identity.bedrock-agentcore.amazonaws.com
+          - Sid: PasarRolesDelSistemaSoloASusServicios
+            Effect: Allow
+            Action: iam:PassRole
+            Resource:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/AgenteIAM-*
+            Condition:
+              StringEquals:
+                iam:PassedToService:
+                  - bedrock-agentcore.amazonaws.com
+                  - lambda.amazonaws.com
+          # Fase 23: la pila de acceso crea el proveedor OIDC del user pool en IAM,
+          # con el que la persona canjea su token de Cognito por credenciales del
+          # rol que se le crea (AssumeRoleWithWebIdentity, MEDICIONES N). Solo
+          # proveedores cuya URL sea la de Cognito de us-east-1: es el patron del
+          # ARN (oidc-provider/<url sin https://>). Las nueve son las del
+          # recurso: crear, borrar, leer, huella, clientes y etiquetas. El Deny
+          # NuncaOtroProveedorOidc de PoliticaBarreras cierra cualquier otro.
+          - Sid: ProveedorOidcSoloDelPoolDeCognito
+            Effect: Allow
+            Action:
+              - iam:CreateOpenIDConnectProvider
+              - iam:DeleteOpenIDConnectProvider
+              - iam:GetOpenIDConnectProvider
+              - iam:UpdateOpenIDConnectProviderThumbprint
+              - iam:AddClientIDToOpenIDConnectProvider
+              - iam:RemoveClientIDFromOpenIDConnectProvider
+              - iam:TagOpenIDConnectProvider
+              - iam:UntagOpenIDConnectProvider
+              - iam:ListOpenIDConnectProviderTags
+            Resource:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:oidc-provider/cognito-idp.us-east-1.amazonaws.com/*
+          # El manejador list de AWS::IAM::OIDCProvider enumera los proveedores de
+          # la cuenta y esa accion no admite recurso (referencia de autorizacion,
+          # 26-10-2026; misma leccion que ListFunctionUrlConfigs, MEDICIONES H 31).
+          - Sid: ListarProveedoresOidcNoTieneRecurso
+            Effect: Allow
+            Action: iam:ListOpenIDConnectProviders
+            Resource: "*"
+
+  # Denies: ganan a cualquier Allow, tambien a uno que se anada manana por
+  # error en las politicas de arriba.
+  PoliticaBarreras:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: AgenteIAM-Despliegue-Barreras
+      Description: Lo que el rol de despliegue no puede hacer nunca, aunque otra politica lo permita.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Clave ausente (CreateRole sin boundary) -> StringNotEquals da
+          # verdadero -> Deny. Es lo que se quiere.
+          - Sid: NuncaUnRolSinElLimiteDelSistema
+            Effect: Deny
+            Action:
+              - iam:CreateRole
+              - iam:PutRolePermissionsBoundary
+            Resource: "*"
+            Condition:
+              StringNotEquals:
+                iam:PermissionsBoundary:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AgenteIAM-LimiteSistema
+          - Sid: NuncaQuitarNiCambiarUnLimite
+            Effect: Deny
+            Action:
+              - iam:DeleteRolePermissionsBoundary
+              - iam:DeleteUserPermissionsBoundary
+              - iam:PutUserPermissionsBoundary
+            Resource: "*"
+          - Sid: NuncaTocarLoDeLaPilaDeArranque
+            Effect: Deny
+            NotAction:
+              - iam:Get*
+              - iam:List*
+            Resource:
+              - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/AgenteIAM-Despliegue
+              - Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AgenteIAM-Despliegue-*
+              - Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AgenteIAM-LimiteSistema
+              - Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AgenteIAM-Techo
+          - Sid: NuncaIdentidadesHumanasNiPoliticasNuevas
+            Effect: Deny
+            Action:
+              - iam:CreateUser
+              - iam:CreateAccessKey
+              - iam:CreateLoginProfile
+              - iam:UpdateLoginProfile
+              - iam:CreateGroup
+              - iam:AddUserToGroup
+              - iam:AttachUserPolicy
+              - iam:PutUserPolicy
+              - iam:AttachGroupPolicy
+              - iam:PutGroupPolicy
+              - iam:CreatePolicy
+              - iam:CreatePolicyVersion
+              - iam:SetDefaultPolicyVersion
+              - iam:CreateSAMLProvider
+            Resource: "*"
+          # Fase 23: iam:CreateOpenIDConnectProvider salio del Deny de arriba (que
+          # es incondicional y habria ganado al Allow de PoliticaIdentidad) y
+          # tiene el suyo: NotResource = todo proveedor cuyo ARN no sea el de
+          # Cognito de us-east-1. Asi ningun despliegue puede registrar otro
+          # emisor de identidades web en IAM. Sin condicion ni IfExists.
+          - Sid: NuncaOtroProveedorOidc
+            Effect: Deny
+            Action: iam:CreateOpenIDConnectProvider
+            NotResource:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:oidc-provider/cognito-idp.us-east-1.amazonaws.com/*
+          - Sid: NuncaPasarseASiMismo
+            Effect: Deny
+            Action: iam:PassRole
+            Resource:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/AgenteIAM-Despliegue
+          # Riesgo 3: usuarios con contrasena que se salten Identity Center
+          # y su MFA. Lo que IAM no puede impedir (autorregistro u otro
+          # proveedor como propiedades del pool) lo vigilan los tests de la
+          # plantilla de acceso y la revision del conjunto de cambios.
+          - Sid: NuncaUsuariosPropiosEnCognito
+            Effect: Deny
+            Action:
+              - cognito-idp:AdminCreateUser
+              - cognito-idp:AdminSetUserPassword
+              - cognito-idp:AdminResetUserPassword
+              - cognito-idp:AdminConfirmSignUp
+              - cognito-idp:SignUp
+              - cognito-idp:AdminAddUserToGroup
+              - cognito-idp:AdminUpdateUserAttributes
+              - cognito-idp:AdminLinkProviderForUser
+              - cognito-idp:AdminEnableUser
+            Resource: "*"
+          - Sid: NuncaAsumirOtrosRoles
+            Effect: Deny
+            Action: sts:AssumeRole*
+            Resource: "*"
+
+  # --- Limite de los roles del sistema ------------------------------------------
+
+  # Lo maximo que pueden llegar a tener el runtime y el aplicador, sea cual
+  # sea la politica que les ponga la pila base. Union de
+  # los permisos del runtime (rol de infra/cfn/base.yaml) y de
+  # infra/rol-aplicador-permisos.json mas
+  # lo que necesita la Lambda (stream de DynamoDB, cola de fallos).
+  LimiteSistema:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: AgenteIAM-LimiteSistema
+      Description: Permissions boundary de los roles del sistema (runtime y aplicador). No es el techo de los beneficiarios.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: LeerSimularYValidar
+            Effect: Allow
+            Action:
+              - iam:Get*
+              - iam:List*
+              - iam:SimulatePrincipalPolicy
+              - iam:SimulateCustomPolicy
+              - access-analyzer:ValidatePolicy
+              - access-analyzer:CheckNoNewAccess
+              - access-analyzer:CheckAccessNotGranted
+              - sts:GetCallerIdentity
+            Resource: "*"
+          - Sid: CrearSoloPoliticasDelProyecto
+            Effect: Allow
+            Action:
+              - iam:CreatePolicy
+              - iam:TagPolicy
+            Resource:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/agente-iam/*
+          - Sid: AdjuntarSoloAQuienLleveElTecho
+            Effect: Allow
+            Action:
+              - iam:AttachRolePolicy
+              - iam:AttachUserPolicy
+            Resource: "*"
+            Condition:
+              ArnLike:
+                iam:PolicyARN:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/agente-iam/*
+              StringEquals:
+                iam:PermissionsBoundary:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AgenteIAM-Techo
+          # Fase 23: el aplicador crea el rol de la persona. Solo bajo la ruta
+          # /agente-iam/personas/ y solo con el techo como boundary: el boundary
+          # es el limite maximo de lo que el aplicador puede hacer, y los dos
+          # Deny de NuncaEscalar lo repiten como candado.
+          - Sid: CrearRolesDePersonaSoloConElTecho
+            Effect: Allow
+            Action: iam:CreateRole
+            Resource:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/agente-iam/personas/*
+            Condition:
+              StringEquals:
+                iam:PermissionsBoundary:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AgenteIAM-Techo
+          # CreateRole con etiquetas exige iam:TagRole sobre el rol nuevo.
+          # ListRoleTags ya entra por iam:List* de LeerSimularYValidar.
+          - Sid: EtiquetarRolesDePersona
+            Effect: Allow
+            Action: iam:TagRole
+            Resource:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/agente-iam/personas/*
+          # Bloque 3 (correo de la decision, Lambda de avisos). Entra ahora para
+          # que el administrador despliegue arranque una sola vez: el boundary
+          # recorta lo que un rol del sistema puede llegar a tener, y sin esto
+          # el rol de la Lambda de avisos no podria mandar nada. Solo
+          # identidades de esta cuenta y de us-east-1.
+          - Sid: AvisarPorCorreo
+            Effect: Allow
+            Action: ses:SendEmail
+            Resource:
+              Fn::Sub: arn:aws:ses:us-east-1:${AWS::AccountId}:identity/*
+          - Sid: InvocarElModelo
+            Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+            Resource: "*"
+          - Sid: IdentidadDeCargaDeAgentCore
+            Effect: Allow
+            Action: bedrock-agentcore:GetWorkloadAccessToken*
+            Resource: "*"
+          - Sid: RegistroDeSolicitudes
+            Effect: Allow
+            # Sin PutItem: reemplaza la fila entera y dynamodb:Attributes no
+            # lo limita (Fase 18). Cada actor escribe sus atributos con UpdateItem.
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:UpdateItem
+              - dynamodb:ConditionCheckItem
+              - dynamodb:DescribeStream
+              - dynamodb:GetRecords
+              - dynamodb:GetShardIterator
+            # table/agente-iam-* cubre tambien sus streams (table/.../stream/...).
+            Resource:
+              Fn::Sub: arn:aws:dynamodb:us-east-1:${AWS::AccountId}:table/agente-iam-*
+          - Sid: ListarStreamsNoTieneRecurso
+            Effect: Allow
+            Action: dynamodb:ListStreams
+            Resource: "*"
+          - Sid: LeerElPaqueteDeCodigo
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+            Resource: arn:aws:s3:::agente-iam-*/*
+          - Sid: ColaDeFallos
+            Effect: Allow
+            Action: sqs:SendMessage
+            Resource:
+              Fn::Sub: arn:aws:sqs:us-east-1:${AWS::AccountId}:agente-iam-*
+          # Fase 28: las lecturas de metadatos con las que el runtime busca el
+          # recurso pedido antes del modelo (agente_iam/existencia.py; el rol
+          # las concede en base.yaml, ComprobarQueElRecursoExiste). Ninguna
+          # devuelve contenido. logs:DescribeLogGroups ya esta en Observabilidad.
+          - Sid: ComprobarQueElRecursoExiste
+            Effect: Allow
+            Action:
+              - s3:ListAllMyBuckets
+              - dynamodb:DescribeTable
+              - sqs:GetQueueUrl
+              - sns:GetTopicAttributes
+              - cloudwatch:DescribeAlarms
+              - lambda:ListTags
+            Resource: "*"
+          - Sid: Observabilidad
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+              - logs:DescribeLogStreams
+              - logs:DescribeLogGroups
+              - xray:PutTraceSegments
+              - xray:PutTelemetryRecords
+              - xray:GetSamplingRules
+              - xray:GetSamplingTargets
+              - cloudwatch:PutMetricData
+            Resource: "*"
+          # Dentro de un boundary, un Deny limita aunque la politica del rol
+          # lo permita: ningun rol del sistema escala, sea cual sea su
+          # politica.
+          # Fase 23: iam:CreateRole sale de esta lista y entra en los dos Deny
+          # siguientes, que solo lo dejan pasar en la ruta de personas y con el
+          # techo. Con la clave ausente (CreateRole sin boundary) StringNotEquals
+          # da verdadero y deniega (MEDICIONES H 11 y 30): por eso no hay
+          # IfExists en ninguno de los dos.
+          - Sid: NuncaUnRolFueraDeLaRutaDePersonas
+            Effect: Deny
+            Action: iam:CreateRole
+            NotResource:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/agente-iam/personas/*
+          - Sid: NuncaUnRolDePersonaSinElTecho
+            Effect: Deny
+            Action: iam:CreateRole
+            Resource: "*"
+            Condition:
+              StringNotEquals:
+                iam:PermissionsBoundary:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AgenteIAM-Techo
+          - Sid: NuncaEscalar
+            Effect: Deny
+            Action:
+              - iam:CreateUser
+              - iam:PutRolePolicy
+              - iam:PutUserPolicy
+              - iam:PutGroupPolicy
+              - iam:AttachGroupPolicy
+              - iam:CreatePolicyVersion
+              - iam:SetDefaultPolicyVersion
+              - iam:DeletePolicy
+              - iam:DeletePolicyVersion
+              - iam:PutRolePermissionsBoundary
+              - iam:PutUserPermissionsBoundary
+              - iam:DeleteRolePermissionsBoundary
+              - iam:DeleteUserPermissionsBoundary
+              - iam:UpdateAssumeRolePolicy
+              - iam:PassRole
+              - iam:CreateAccessKey
+              - iam:CreateLoginProfile
+              - iam:AddUserToGroup
+              - sts:AssumeRole*
+              - organizations:*
+            Resource: "*"
+
+  # --- Techo de los beneficiarios -------------------------------------------------
+
+  # Copia tal cual de infra/boundary-agente-iam-techo.json (lo comprueba
+  # tests/seguridad/test_plantillas_cfn.py). v2 (ADR-002): EC2 solo Describe*,
+  # sin gestion de permisos y nada sobre los recursos del sistema. No se edita
+  # a mano: lo escribe scripts/generar_techo.py. Desde el 24-10-2026 niega
+# tambien las escrituras sin tipo de recurso (S3) y los recursos de otra
+# cuenta (S5).
+  Techo:
+    Type: AWS::IAM::ManagedPolicy
+    # W3037 ("la accion no existe") compara con la lista de acciones que trae
+    # cfn-lint, mas vieja que la referencia de autorizacion de la que sale
+    # este documento: el 24-10-2026 no conocia cuatro de cloudwatch
+    # (PutRecords, UpdateOTelEnrichment, ...). Aqui manda la referencia del
+    # dia, y `generar_techo.py --comprobar` es el que la vigila.
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks:
+            - W3037
+    Properties:
+      ManagedPolicyName: AgenteIAM-Techo
+      Description: Permissions boundary de los beneficiarios. Lo maximo que el aplicador puede conceder.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AlcanceDelSistema
+          Effect: Allow
+          Action:
+          - s3:*
+          - dynamodb:*
+          - sqs:*
+          - sns:*
+          - logs:*
+          - cloudwatch:*
+          - ec2:Describe*
+          - lambda:*
+          Resource: '*'
+        - Sid: AutoservicioMinimoDelUsuario
+          Effect: Allow
+          Action:
+          - iam:ChangePassword
+          - iam:GetUser
+          - iam:GetAccountPasswordPolicy
+          - iam:ListMFADevices
+          - sts:GetCallerIdentity
+          Resource: '*'
+        - Sid: GemelaDeAccionesProhibidasDelCodigo
+          Effect: Deny
+          Action:
+          - lambda:UpdateFunctionCode
+          - lambda:AddPermission
+          - lambda:UpdateFunctionConfiguration
+          - ec2:ModifyInstanceAttribute
+          - ec2:DescribeInstanceAttribute
+          - ec2:DescribeLaunchTemplateVersions
+          - ec2:DescribeSpotFleetRequests
+          - ec2:DescribeSpotInstanceRequests
+          - ec2:DescribeVerifiedAccessTrustProviders
+          - ec2:DescribeVpnConnections
+          - ec2:DescribeConversionTasks
+          - ec2:DescribeImportImageTasks
+          - ec2:DescribeImportSnapshotTasks
+          - ec2:DescribeBundleTasks
+          Resource: '*'
+        - Sid: SinGestionDePermisos
+          Effect: Deny
+          Action:
+          - s3:AssociateAccessGrantsIdentityCenter
+          - s3:BypassGovernanceRetention
+          - s3:CreateAccessGrant
+          - s3:CreateAccessGrantsInstance
+          - s3:CreateAccessGrantsLocation
+          - s3:DeleteAccessGrant
+          - s3:DeleteAccessGrantsInstance
+          - s3:DeleteAccessGrantsInstanceResourcePolicy
+          - s3:DeleteAccessGrantsLocation
+          - s3:DeleteAccessPointPolicy
+          - s3:DeleteAccessPointPolicyForObjectLambda
+          - s3:DeleteBucketPolicy
+          - s3:DissociateAccessGrantsIdentityCenter
+          - s3:ObjectOwnerOverrideToBucketOwner
+          - s3:PutAccessGrantsInstanceResourcePolicy
+          - s3:PutAccessPointPolicy
+          - s3:PutAccessPointPolicyForObjectLambda
+          - s3:PutAccessPointPublicAccessBlock
+          - s3:PutAccountPublicAccessBlock
+          - s3:PutBucketAcl
+          - s3:PutBucketOwnershipControls
+          - s3:PutBucketPolicy
+          - s3:PutBucketPublicAccessBlock
+          - s3:PutMultiRegionAccessPointPolicy
+          - s3:PutObjectAcl
+          - s3:PutObjectVersionAcl
+          - s3:UpdateAccessGrantsLocation
+          - dynamodb:DeleteResourcePolicy
+          - dynamodb:PutResourcePolicy
+          - dynamodb:UpdateAbacStatus
+          - sqs:AddPermission
+          - sqs:RemovePermission
+          - sqs:SetQueueAttributes
+          - sns:AddPermission
+          - sns:RemovePermission
+          - sns:SetTopicAttributes
+          - logs:DeleteResourcePolicy
+          - logs:PutResourcePolicy
+          - cloudwatch:AssumeAccessProfile
+          - cloudwatch:CreateAccessGrant
+          - cloudwatch:CreateAccessProfile
+          - cloudwatch:CreateDomainAccessGrantForOrganization
+          - cloudwatch:DeleteAccessGrant
+          - cloudwatch:DeleteAccessProfile
+          - cloudwatch:DeleteDomainAccessGrantForOrganization
+          - cloudwatch:UpdateAccessProfile
+          - lambda:AddLayerVersionPermission
+          - lambda:DeleteResourcePolicy
+          - lambda:DisableReplication
+          - lambda:EnableReplication
+          - lambda:PutResourcePolicy
+          - lambda:RemoveLayerVersionPermission
+          - lambda:RemovePermission
+          Resource: '*'
+        - Sid: SinEscriturasDeAlcanceDeCuenta
+          Effect: Deny
+          Action:
+          - s3:CreateJob
+          - s3:CreateStorageLensGroup
+          - s3:PutStorageLensConfiguration
+          - dynamodb:InjectError
+          - dynamodb:PurchaseReservedCapacityOfferings
+          - sns:CreatePlatform*
+          - sns:CreateSMSSandboxPhoneNumber
+          - sns:DeleteEndpoint
+          - sns:DeletePlatformApplication
+          - sns:DeleteSMSSandboxPhoneNumber
+          - sns:OptInPhoneNumber
+          - sns:SetEndpointAttributes
+          - sns:SetPlatformApplicationAttributes
+          - sns:SetSMSAttributes
+          - sns:VerifySMSSandboxPhoneNumber
+          - logs:AssociateSourceToS3TableIntegration
+          - logs:CallWithBearerToken
+          - logs:Cancel*
+          - logs:CreateImportTask
+          - logs:CreateLogDelivery
+          - logs:DeleteAccountPolicy
+          - logs:DeleteIndexPolicy
+          - logs:DeleteIntegration
+          - logs:DeleteLogDelivery
+          - logs:DeletePipelineRule
+          - logs:DeleteQueryDefinition
+          - logs:DisassociateSourceFromS3TableIntegration
+          - logs:Link
+          - logs:PutAccountPolicy
+          - logs:PutIndexPolicy
+          - logs:PutIntegration
+          - logs:PutPipelineRule
+          - logs:PutQueryDefinition
+          - logs:PutStorageTierPolicy
+          - logs:UpdateLogDelivery
+          - cloudwatch:CallWithBearerToken
+          - cloudwatch:Create*
+          - cloudwatch:DeleteAnomalyDetector
+          - cloudwatch:DeleteOmniThread
+          - cloudwatch:DeleteResourceMetricsConfiguration
+          - cloudwatch:EnableTopologyDiscovery
+          - cloudwatch:InvokeIntegration
+          - cloudwatch:Link
+          - cloudwatch:PutAnomalyDetector
+          - cloudwatch:PutIntelligenceConfiguration
+          - cloudwatch:PutManagedInsightRules
+          - cloudwatch:PutRecords
+          - cloudwatch:QueryTraces
+          - cloudwatch:SearchPrincipals
+          - cloudwatch:StartO*
+          - cloudwatch:StartTelemetry*
+          - cloudwatch:StopOTelEnrichment
+          - cloudwatch:StopTelemetry*
+          - cloudwatch:Submit*
+          - cloudwatch:UpdateOTelEnrichment
+          - cloudwatch:UpdateOmniThread
+          - cloudwatch:UpdatePreferences
+          - cloudwatch:UpdateResourceMetricsConfiguration
+          - lambda:ConnectMicrovm
+          - lambda:CreateCodeSigningConfig
+          - lambda:CreateEventSourceMapping
+          - lambda:CreateMicrovmImage
+          - lambda:PassNetworkConnector
+          Resource: '*'
+        - Sid: NadaSobreLosRecursosDelSistema
+          Effect: Deny
+          Action: '*'
+          Resource:
+          - arn:aws:s3:::agente-iam-*
+          - arn:aws:dynamodb:*:*:table/agente-iam-*
+          - arn:aws:sqs:*:*:agente-iam-*
+          - arn:aws:sns:*:*:agente-iam-*
+          - arn:aws:lambda:*:*:function:agente-iam-*
+          - arn:aws:logs:*:*:log-group:/aws/bedrock-agentcore/runtimes/agente_iam*
+          - arn:aws:logs:*:*:log-group:/aws/lambda/agente-iam-*
+          - arn:aws:logs:*:*:log-group:agente-iam-*
+          - arn:aws:cloudwatch:*:*:alarm:agente-iam-*
+        - Sid: NiLosDisparadoresDelSistema
+          Effect: Deny
+          Action:
+          - lambda:CreateEventSourceMapping
+          - lambda:DeleteEventSourceMapping
+          - lambda:GetEventSourceMapping
+          - lambda:UpdateEventSourceMapping
+          Resource: '*'
+          Condition:
+            ArnLike:
+              lambda:FunctionArn: arn:aws:lambda:*:*:function:agente-iam-*
+        - Sid: SoloRecursosDeLaPropiaCuenta
+          Effect: Deny
+          Action:
+          - s3:*
+          - dynamodb:*
+          - sqs:*
+          - sns:*
+          - logs:*
+          - cloudwatch:*
+          - ec2:*
+          - lambda:*
+          Resource: '*'
+          Condition:
+            StringNotEqualsIfExists:
+              aws:ResourceAccount: ${aws:PrincipalAccount}
+
+Outputs:
+  RolDespliegueArn:
+    Description: ARN que el operador pasa a CloudFormation (cloudformation:RoleArn).
+    Value:
+      Fn::GetAtt: [RolDespliegue, Arn]
+  LimiteSistemaArn:
+    Description: Boundary obligatorio de los roles del sistema.
+    Value:
+      Ref: LimiteSistema
+  TechoArn:
+    Description: Boundary de los beneficiarios.
+    Value:
+      Ref: Techo

@@ -1,0 +1,19 @@
+# ruff (Fase 13): revisa el codigo sin ejecutarlo. Solo reglas que cazan
+# errores de verdad, no estilo:
+#   F    pyflakes: nombres sin definir (F821, el NameError de la Fase 9),
+#        imports y variables sin usar, f-strings rotas
+#   E9   errores de sintaxis
+#   B    bugbear: trampas conocidas (argumentos mutables por defecto,
+#        pytest.raises(Exception), excepciones tragadas...)
+#   PLE  errores que detecta pylint (llamadas mal formadas, etc.)
+#   RUF100  un `# noqa` que no calla ninguna regla activa (24-10-2026, O6:
+#        habia 15, de BLE001, E402 y N802, que no hacian nada; el porque
+#        que llevaban al lado se quedo como comentario)
+#   PT018   en los tests, un `assert a and b` se parte en dos (24-10-2026,
+#        O14): al fallar, pytest dice cual de las dos condiciones fallo
+# Lo corren el pre-commit y el tipo seguridad (scripts/pruebas.sh).
+target-version = "py312"
+extend-exclude = ["local", "evidencias", "dist", "solicitudes"]
+
+[lint]
+select = ["F", "E9", "B", "PLE", "RUF100", "PT018"]

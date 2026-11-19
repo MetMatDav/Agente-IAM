@@ -1,0 +1,10 @@
+{
+  "campos": {
+    "servicio": "s3",
+    "recurso": "arn:aws:s3:::finanzas-demo-111122223333",
+    "region": "us-east-1"
+  },
+  "horas": 2,
+  "correo_aviso": "persona@example.com",
+  "justificacion": "Necesito ver y subir informes CSV en la carpeta cierres/ del bucket finanzas-demo para el cierre mensual. No necesito borrar nada ni tocar otras carpetas."
+}

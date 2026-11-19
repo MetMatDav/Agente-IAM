@@ -1,0 +1,11 @@
+{
+  "solicitud_id": "req-006-ec2-ana",
+  "principal_arn_declarado": "arn:aws:iam::111122223333:role/app-finanzas-demo",
+  "campos": {
+    "servicio": "ec2",
+    "recurso": "todas-las-instancias",
+    "tipo_acceso": "lectura",
+    "region": "us-east-1"
+  },
+  "justificacion": "Necesito ver el inventario de instancias EC2 para un reporte de costos."
+}

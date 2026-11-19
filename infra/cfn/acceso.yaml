@@ -1,0 +1,264 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Agente IAM - pila de acceso. Cognito federado con Identity Center por SAML:
+  emite el JWT con el que las personas llaman al runtime. Cuenta agente-iam,
+  us-east-1.
+
+# Por que existe (ADR-001): el emisor del JWT que valida AgentCore es Cognito,
+# con Identity Center como unico proveedor SAML. Identity Center no sirve como
+# emisor directo (sin descubrimiento OIDC y con token opaco; Prueba A). La
+# Prueba B monto este camino con una pila temporal (docs/MEDICIONES.md D.2) que
+# se borro; esta es la version definitiva: solo las piezas de Cognito, con
+# proteccion contra borrado y los nombres del proyecto. Sin bucket, rol,
+# runtime ni trail: el runtime vive en otra pila y recibe de aqui DiscoveryUrl
+# y ClienteId.
+#
+# Cognito no tiene usuarios propios: solo traduce la asercion SAML de Identity
+# Center a un JWT. Nadie puede registrarse ni se crean usuarios con contrasena
+# (no hay AWS::Cognito::UserPoolUser; lo vigila tests/seguridad/test_pila_acceso.py).
+#
+# Dos despliegues, porque la aplicacion SAML de Identity Center solo se crea en
+# consola (la API no crea aplicaciones SAML):
+#   1. MetadataUrl vacio: user pool y dominio. Las salidas
+#      AcsUrlParaIdentityCenter y AudienceParaIdentityCenter son los dos datos
+#      que pide la consola.
+#   2. MetadataUrl con la URL de metadatos de esa aplicacion: proveedor SAML y
+#      cliente (sale ClienteId).
+#
+# Pasos de consola de Mateo entre los dos despliegues (cuenta de gestion,
+# IAM Identity Center, Aplicaciones, Agregar aplicacion personalizada SAML 2.0):
+#   - Application ACS URL = salida AcsUrlParaIdentityCenter.
+#   - Application SAML audience = salida AudienceParaIdentityCenter.
+#   - Mapeo de atributos: Subject = ${user:subject} con formato persistent;
+#     email = ${user:email} (formato basic).
+#   - Duracion de la sesion: 4 horas.
+#   - Asignar el grupo agente-iam-solicitantes a la aplicacion.
+#   - Copiar la URL de metadatos de Identity Center y pasarla como MetadataUrl
+#     en el segundo despliegue.
+# Despues, la pila de identidades (infra/cfn/identidades.yaml) recibe el ARN de
+# la aplicacion en su parametro AplicacionSamlArn.
+#
+# Fase 23, bloque 2: un segundo cliente publico, agente-iam-web, para la pagina
+# estatica. Su URL de retorno es la de CloudFront, que no existe hasta que se
+# despliega la pila web (infra/cfn/web.yaml; CloudFront da la URL al crearse),
+# asi que UrlRetornoWeb es un parametro vacio por defecto: con el vacio no hay
+# cliente web y la pila se despliega como antes; con la URL (y barra final) se
+# crea ClienteWeb y entra en la lista de clientes del proveedor OIDC.
+#
+# Fase 27 (docs/ADR-005-dominio-propio-y-tls.md): la URL puede ser tambien
+# exactamente https://agente-iam.mateo.solutions/, el dominio propio donde rige
+# TLS 1.2. Ningun otro dominio: la URL de retorno es a donde Cognito manda el
+# codigo de login, y el patron impide que un error o un rol de despliegue
+# comprometido lo mande a otro sitio. Con el dominio, el login desde la URL de
+# CloudFront deja de funcionar (Cognito rechaza esa URL de retorno).
+#
+# Sin etiquetas cortas: la lee yaml.safe_load en tests/seguridad/test_pila_acceso.py.
+
+Parameters:
+  PrefijoDominio:
+    Type: String
+    Description: Prefijo del dominio de Cognito, con sufijo aleatorio (es publico y unico en la region; sin numero de cuenta).
+    AllowedPattern: "^agente-iam-[0-9a-f]{6}$"
+  MetadataUrl:
+    Type: String
+    Default: ""
+    Description: URL de metadatos SAML de la aplicacion de Identity Center. Vacia en el primer despliegue.
+  UrlRetornoWeb:
+    Type: String
+    Default: ""
+    Description: URL de la pagina web (salida UrlWeb de la pila web) con barra final, la de CloudFront o la del dominio propio. Vacia hasta que exista la pila web; con ella vacia no se crea el cliente de la web.
+    AllowedPattern: "^(https://[a-z0-9]+\\.cloudfront\\.net/|https://agente-iam\\.mateo\\.solutions/)?$"
+
+Conditions:
+  Federado:
+    Fn::Not:
+      - Fn::Equals:
+          - Ref: MetadataUrl
+          - ""
+  ConWeb:
+    Fn::And:
+      - Condition: Federado
+      - Fn::Not:
+          - Fn::Equals:
+              - Ref: UrlRetornoWeb
+              - ""
+
+Resources:
+  # --- Despliegue 1 ---------------------------------------------------------
+
+  # Plan Lite: el mas barato (50 MAU federados gratis). Con proteccion contra
+  # borrado y Retain: borrar la pila no borra el pool, porque cambiar el
+  # emisor invalida el DiscoveryUrl que usa el runtime y cada token emitido.
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: agente-iam-acceso
+      UserPoolTier: LITE
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      DeletionProtection: ACTIVE
+      UserPoolTags:
+        proyecto: agente-iam
+
+  # Interfaz clasica (version 1): la persona no la ve, el enlace de entrada la
+  # manda directo a Identity Center. La version 2 exige un plan distinto de Lite.
+  Dominio:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId:
+        Ref: UserPool
+      Domain:
+        Ref: PrefijoDominio
+      ManagedLoginVersion: 1
+
+  # --- Despliegue 2 (con MetadataUrl) ---------------------------------------
+
+  # Identity Center como proveedor SAML. El nombre no admite guiones bajos y
+  # es el que usan el cliente y el enlace de entrada.
+  ProveedorIdentityCenter:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Condition: Federado
+    Properties:
+      UserPoolId:
+        Ref: UserPool
+      ProviderName: IdentityCenter
+      ProviderType: SAML
+      ProviderDetails:
+        MetadataURL:
+          Ref: MetadataUrl
+      AttributeMapping:
+        email: email
+
+  # Cliente publico (una CLI no puede guardar un secreto): sin secreto,
+  # codigo de autorizacion con PKCE, solo Identity Center como proveedor y
+  # ningun flujo de contrasena. localhost es la unica URL de retorno sin
+  # HTTPS que Cognito admite. Tokens de acceso e identidad de una hora
+  # (ESPECIFICACION 1.6); el de refresco queda con el valor por defecto.
+  ClienteCli:
+    Type: AWS::Cognito::UserPoolClient
+    Condition: Federado
+    DependsOn: ProveedorIdentityCenter
+    Properties:
+      UserPoolId:
+        Ref: UserPool
+      ClientName: agente-iam-cli
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+      SupportedIdentityProviders:
+        - IdentityCenter
+      CallbackURLs:
+        - http://localhost:8080/callback
+      ExplicitAuthFlows:
+        - ALLOW_REFRESH_TOKEN_AUTH
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+
+  # Cliente de la pagina web (Fase 23, bloque 2): igual que el de la CLI (publico,
+  # PKCE, solo Identity Center, sin flujos de contrasena, tokens de una hora)
+  # salvo el nombre y la URL de retorno, que es la de CloudFront y nada mas. El
+  # cierre de sesion vuelve a la misma URL. Solo existe con UrlRetornoWeb.
+  ClienteWeb:
+    Type: AWS::Cognito::UserPoolClient
+    Condition: ConWeb
+    DependsOn: ProveedorIdentityCenter
+    Properties:
+      UserPoolId:
+        Ref: UserPool
+      ClientName: agente-iam-web
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+      SupportedIdentityProviders:
+        - IdentityCenter
+      CallbackURLs:
+        - Ref: UrlRetornoWeb
+      LogoutURLs:
+        - Ref: UrlRetornoWeb
+      ExplicitAuthFlows:
+        - ALLOW_REFRESH_TOKEN_AUTH
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+
+  # Fase 23: el pool como proveedor OIDC en IAM. Con el, la persona canjea su
+  # token de identidad de Cognito por credenciales de un rol de persona
+  # (sts:AssumeRoleWithWebIdentity, MEDICIONES N): sesiones de hasta 12 horas, sin
+  # encadenar roles. Va con el cliente de la CLI y, si existe (ConWeb), con el
+  # de la pagina web: un cliente fuera de ClientIdList no puede canjear. Sin
+  # ThumbprintList: la propiedad no es obligatoria (cfn-lint 1.57.2) y para
+  # Cognito IAM valida con su almacen de CA de confianza. Url sin barra final y
+  # con la region de la pila; es lo que se escribira en la confianza de cada rol.
+  ProveedorOidc:
+    Type: AWS::IAM::OIDCProvider
+    Condition: Federado
+    Properties:
+      Url:
+        Fn::Sub: "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
+      ClientIdList:
+        Fn::If:
+          - ConWeb
+          - - Ref: ClienteCli
+            - Ref: ClienteWeb
+          - - Ref: ClienteCli
+      Tags:
+        - Key: proyecto
+          Value: agente-iam
+
+Outputs:
+  UserPoolId:
+    Description: Id del user pool de Cognito.
+    Value:
+      Ref: UserPool
+  DiscoveryUrl:
+    Description: URL de descubrimiento OIDC del emisor, para el autorizador JWT del runtime.
+    Value:
+      Fn::Sub: "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}/.well-known/openid-configuration"
+  UrlDominio:
+    Description: Dominio de Cognito (base del enlace de entrada).
+    Value:
+      Fn::Sub: "https://${PrefijoDominio}.auth.${AWS::Region}.amazoncognito.com"
+  AcsUrlParaIdentityCenter:
+    Description: Application ACS URL de la aplicacion SAML de Identity Center.
+    Value:
+      Fn::Sub: "https://${PrefijoDominio}.auth.${AWS::Region}.amazoncognito.com/saml2/idpresponse"
+  AudienceParaIdentityCenter:
+    Description: Application SAML audience de la aplicacion SAML de Identity Center.
+    Value:
+      Fn::Sub: "urn:amazon:cognito:sp:${UserPool}"
+  ClienteId:
+    Description: Id del cliente publico de la CLI (solo tras el segundo despliegue).
+    Condition: Federado
+    Value:
+      Ref: ClienteCli
+  ClienteWebId:
+    Description: Id del cliente publico de la pagina web (solo con UrlRetornoWeb).
+    Condition: ConWeb
+    Value:
+      Ref: ClienteWeb
+  ProveedorOidcArn:
+    Description: ARN del proveedor OIDC del pool en IAM (confianza de los roles de persona; solo tras el segundo despliegue).
+    Condition: Federado
+    Value:
+      Fn::GetAtt:
+        - ProveedorOidc
+        - Arn

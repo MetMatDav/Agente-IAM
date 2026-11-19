@@ -1,0 +1,11 @@
+{
+  "solicitud_id": "req-003-fantasma",
+  "principal_arn_declarado": "arn:aws:iam::111122223333:user/no.existe.este.usuario",
+  "campos": {
+    "servicio": "kms",
+    "recurso": "clave-maestra",
+    "tipo_acceso": "administracion",
+    "region": "us-east-1"
+  },
+  "justificacion": "Necesito administrar las llaves de cifrado."
+}

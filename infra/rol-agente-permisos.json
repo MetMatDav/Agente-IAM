@@ -1,0 +1,69 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "LeerIAM",
+      "Effect": "Allow",
+      "Action": [
+        "iam:Get*",
+        "iam:List*",
+        "iam:SimulatePrincipalPolicy",
+        "iam:SimulateCustomPolicy"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ValidarPoliticas",
+      "Effect": "Allow",
+      "Action": [
+        "access-analyzer:ValidatePolicy",
+        "access-analyzer:CheckNoNewAccess",
+        "access-analyzer:CheckAccessNotGranted",
+        "access-analyzer:CheckNoPublicAccess"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "InvocarModelo",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
+        "arn:aws:bedrock:us-east-1:111122223333:inference-profile/us.anthropic.claude-*"
+      ]
+    },
+    {
+      "Sid": "NuncaEscribirEnIAM",
+      "Effect": "Deny",
+      "Action": [
+        "iam:Create*",
+        "iam:Put*",
+        "iam:Attach*",
+        "iam:Detach*",
+        "iam:Delete*",
+        "iam:Update*",
+        "iam:Add*",
+        "iam:Remove*",
+        "iam:Set*",
+        "iam:Tag*",
+        "iam:Untag*",
+        "iam:Upload*",
+        "iam:Change*",
+        "iam:Enable*",
+        "iam:Deactivate*",
+        "iam:Reset*",
+        "iam:Resync*",
+        "iam:PassRole",
+        "organizations:*",
+        "sts:AssumeRole",
+        "sts:AssumeRoleWithSAML",
+        "sts:AssumeRoleWithWebIdentity",
+        "sts:GetFederationToken"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

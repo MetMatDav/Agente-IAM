@@ -1,0 +1,387 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Agente IAM - Prueba B de AgentCore (temporal). Cognito federado con
+  Identity Center por SAML, runtime eco con autorizador JWT y trail de
+  eventos de datos. Cuenta agente-iam, us-east-1. Se borra al terminar.
+
+# Por que existe (Fase 15, 23-10-2026): la Prueba A demostro que AgentCore no
+# puede validar tokens de Identity Center (sin descubrimiento, token opaco).
+# Esta pila monta el camino alternativo de docs/PRUEBAS-AGENTCORE.md,
+# seccion 5, y mide donde queda la identidad del usuario: en el token
+# (claims que ve el eco), en el rol del runtime (sesion en CloudTrail) o en
+# el evento de la invocacion (trail de datos). Decidido por Mateo: los
+# recursos de prueba se borran, y borrar la pila los borra todos (vaciando
+# antes los dos buckets).
+#
+# Dos despliegues:
+#   1. MetadataUrl vacio: bucket, rol, user pool y dominio. Con sus salidas
+#      se crea en consola la aplicacion SAML de Identity Center (la API no
+#      crea aplicaciones SAML) y se sube el paquete del eco.
+#   2. MetadataUrl con la URL de metadatos de esa aplicacion: proveedor
+#      SAML, cliente, runtime y trail.
+#
+# Sin etiquetas cortas: la lee yaml.safe_load en tests/seguridad/test_prueba_eco.py.
+
+Parameters:
+  PrefijoDominio:
+    Type: String
+    Description: Prefijo del dominio de Cognito, con sufijo aleatorio (es publico y unico en la region; sin numero de cuenta).
+    AllowedPattern: "^agente-iam-pruebas-[0-9a-f]{6}$"
+  MetadataUrl:
+    Type: String
+    Default: ""
+    Description: URL de metadatos SAML de la aplicacion de Identity Center. Vacia en el primer despliegue.
+  ConTrailDeDatos:
+    Type: String
+    Default: "si"
+    AllowedValues: ["si", "no"]
+    Description: Trail temporal con los eventos de datos de AgentCore Runtime (paso B.9).
+
+Conditions:
+  Federado:
+    Fn::Not:
+      - Fn::Equals:
+          - Ref: MetadataUrl
+          - ""
+  TrailDeDatos:
+    Fn::And:
+      - Condition: Federado
+      - Fn::Equals:
+          - Ref: ConTrailDeDatos
+          - "si"
+
+Resources:
+  # --- Despliegue 1 ---------------------------------------------------------
+
+  BucketPaquete:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      Tags:
+        - Key: proyecto
+          Value: agente-iam
+
+  PoliticaBucketPaquete:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: BucketPaquete
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SoloTLS
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - Fn::GetAtt: [BucketPaquete, Arn]
+              - Fn::Sub: "${BucketPaquete.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # El rol con el que corre el eco. Confianza igual que la del runtime real
+  # (rol AgenteIAM-Runtime de infra/cfn/base.yaml): solo AgentCore, solo desde esta
+  # cuenta (confused deputy). Sin sts:SetSourceIdentity: lo que se mide es si
+  # la identidad del usuario llega sola al rol, y lo esperado es que no.
+  # Permisos: los de infra/pruebas-agentcore/rol-eco-permisos.json, con el
+  # bucket de esta pila. Ni Bedrock, ni IAM, ni DynamoDB.
+  RolEco:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: AgenteIAM-PruebaEco-Runtime
+      Description: Rol de ejecucion del agente eco de la Prueba B - temporal
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AgentCoreAsumeEsteRol
+            Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  Ref: AWS::AccountId
+              ArnLike:
+                aws:SourceArn:
+                  Fn::Sub: "arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:*"
+      Policies:
+        - PolicyName: AgenteIAM-PruebaEco-Permisos
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: LeerElPaqueteDelEco
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource:
+                  Fn::Sub: "${BucketPaquete.Arn}/agente-eco/*"
+              - Sid: LogsDeAgentCore
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                  - logs:DescribeLogGroups
+                Resource:
+                  Fn::Sub: "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*"
+              - Sid: TrazasYMetricasDeAgentCore
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                Resource: "*"
+              - Sid: MetricasSoloEnElNamespaceDeAgentCore
+                Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: bedrock-agentcore
+      Tags:
+        - Key: proyecto
+          Value: agente-iam
+
+  # Cognito no tiene usuarios propios: solo traduce la asercion SAML de
+  # Identity Center a un JWT. Nadie puede registrarse ni crear usuarios con
+  # contrasena en el pool. Plan Lite: el mas barato (50 MAU federados gratis).
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: agente-iam-pruebas
+      UserPoolTier: LITE
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      DeletionProtection: INACTIVE
+      UserPoolTags:
+        proyecto: agente-iam
+
+  # Interfaz clasica (version 1): el usuario no la ve, el enlace de B.5 le
+  # manda directo a Identity Center. La version 2 exige un plan distinto de Lite.
+  Dominio:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId:
+        Ref: UserPool
+      Domain:
+        Ref: PrefijoDominio
+      ManagedLoginVersion: 1
+
+  # --- Despliegue 2 (con MetadataUrl) ---------------------------------------
+
+  # Identity Center como proveedor SAML. El nombre no admite guiones bajos y
+  # es el que usan el cliente y el enlace de B.5.
+  ProveedorIdentityCenter:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Condition: Federado
+    Properties:
+      UserPoolId:
+        Ref: UserPool
+      ProviderName: IdentityCenter
+      ProviderType: SAML
+      ProviderDetails:
+        MetadataURL:
+          Ref: MetadataUrl
+      AttributeMapping:
+        email: email
+
+  # Cliente publico (una CLI no puede guardar un secreto): sin secreto,
+  # codigo de autorizacion con PKCE, solo Identity Center como proveedor y
+  # ningun flujo de contrasena. localhost es la unica URL de retorno sin
+  # HTTPS que Cognito admite, y solo para pruebas.
+  ClienteCli:
+    Type: AWS::Cognito::UserPoolClient
+    Condition: Federado
+    DependsOn: ProveedorIdentityCenter
+    Properties:
+      UserPoolId:
+        Ref: UserPool
+      ClientName: agente-iam-cli
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+      SupportedIdentityProviders:
+        - IdentityCenter
+      CallbackURLs:
+        - http://localhost:8080/callback
+      ExplicitAuthFlows:
+        - ALLOW_REFRESH_TOKEN_AUTH
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+
+  # El eco con autorizador JWT: un runtime acepta un solo modo de entrada,
+  # asi que este ya no admite SigV4. allowedClients y no allowedAudience: el
+  # token de acceso de Cognito lleva client_id y no aud. Solo pasa la
+  # cabecera Authorization, para que el eco ensene los claims que AgentCore
+  # ya valido (y nunca el token: lo vigila tests/unitarios/test_agente_eco.py).
+  RuntimeEco:
+    Type: AWS::BedrockAgentCore::Runtime
+    Condition: Federado
+    Properties:
+      AgentRuntimeName: agente_iam_eco
+      Description: Agente eco de la Prueba B - temporal
+      RoleArn:
+        Fn::GetAtt: [RolEco, Arn]
+      NetworkConfiguration:
+        NetworkMode: PUBLIC
+      ProtocolConfiguration: HTTP
+      AgentRuntimeArtifact:
+        CodeConfiguration:
+          Code:
+            S3:
+              Bucket:
+                Ref: BucketPaquete
+              Prefix: agente-eco/agente-eco.zip
+          Runtime: PYTHON_3_12
+          EntryPoint:
+            - agente_eco.py
+      AuthorizerConfiguration:
+        CustomJWTAuthorizer:
+          DiscoveryUrl:
+            Fn::Sub: "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}/.well-known/openid-configuration"
+          AllowedClients:
+            - Ref: ClienteCli
+      RequestHeaderConfiguration:
+        RequestHeaderAllowlist:
+          - Authorization
+      Tags:
+        proyecto: agente-iam
+
+  # Trail temporal de eventos de datos de AgentCore Runtime (B.9): el de
+  # Control Tower solo registra eventos de gestion, y InvokeAgentRuntime es
+  # de datos. Sin eventos de gestion (serian una segunda copia de pago).
+  BucketTrail:
+    Type: AWS::S3::Bucket
+    Condition: TrailDeDatos
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      Tags:
+        - Key: proyecto
+          Value: agente-iam
+
+  PoliticaBucketTrail:
+    Type: AWS::S3::BucketPolicy
+    Condition: TrailDeDatos
+    Properties:
+      Bucket:
+        Ref: BucketTrail
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: CloudTrailCompruebaLaAcl
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource:
+              Fn::GetAtt: [BucketTrail, Arn]
+            Condition:
+              StringEquals:
+                aws:SourceArn:
+                  Fn::Sub: "arn:aws:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/agente-iam-prueba-datos"
+          - Sid: CloudTrailEscribeSoloSusRegistros
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource:
+              Fn::Sub: "${BucketTrail.Arn}/AWSLogs/${AWS::AccountId}/*"
+            Condition:
+              StringEquals:
+                aws:SourceArn:
+                  Fn::Sub: "arn:aws:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/agente-iam-prueba-datos"
+          - Sid: SoloTLS
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - Fn::GetAtt: [BucketTrail, Arn]
+              - Fn::Sub: "${BucketTrail.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  TrailDatos:
+    Type: AWS::CloudTrail::Trail
+    Condition: TrailDeDatos
+    DependsOn: PoliticaBucketTrail
+    Properties:
+      TrailName: agente-iam-prueba-datos
+      S3BucketName:
+        Ref: BucketTrail
+      IsLogging: true
+      IsMultiRegionTrail: false
+      IncludeGlobalServiceEvents: false
+      EnableLogFileValidation: true
+      AdvancedEventSelectors:
+        - Name: Solo eventos de datos de AgentCore Runtime
+          FieldSelectors:
+            - Field: eventCategory
+              Equals:
+                - Data
+            - Field: resources.type
+              Equals:
+                - AWS::BedrockAgentCore::Runtime
+      Tags:
+        - Key: proyecto
+          Value: agente-iam
+
+Outputs:
+  BucketPaquete:
+    Description: Donde subir agente-eco/agente-eco.zip antes del despliegue 2.
+    Value:
+      Ref: BucketPaquete
+  UserPoolId:
+    Value:
+      Ref: UserPool
+  UrlDominio:
+    Description: Dominio de Cognito (para el enlace de B.5).
+    Value:
+      Fn::Sub: "https://${PrefijoDominio}.auth.${AWS::Region}.amazoncognito.com"
+  AcsUrlParaIdentityCenter:
+    Description: Application ACS URL de la aplicacion SAML (paso B.2).
+    Value:
+      Fn::Sub: "https://${PrefijoDominio}.auth.${AWS::Region}.amazoncognito.com/saml2/idpresponse"
+  AudienceParaIdentityCenter:
+    Description: Application SAML audience de la aplicacion SAML (paso B.2).
+    Value:
+      Fn::Sub: "urn:amazon:cognito:sp:${UserPool}"
+  ClienteId:
+    Condition: Federado
+    Value:
+      Ref: ClienteCli
+  RuntimeArn:
+    Condition: Federado
+    Value:
+      Fn::GetAtt: [RuntimeEco, AgentRuntimeArn]

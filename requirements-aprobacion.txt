@@ -1,0 +1,15 @@
+# Dependencias de la Lambda de aprobacion (agente-iam-aprobacion, ADR-003).
+# El paquete lo construye `scripts/empaquetar.sh aprobacion`, compilado para
+# aarch64 como el del runtime.
+#
+# Es requirements.txt sin `bedrock-agentcore`: ese SDK solo lo usa
+# `servidor.py`, que la Lambda no lleva. Lo demas es lo que importa la cadena
+# de `aprobar.py`: strands-agents por `catalogo.py` y `validacion.py` (la
+# decoracion `@tool`), boto3 y botocore por `aprobar.py` y `almacen.py`,
+# pydantic por `models.py`. Mismas versiones que requirements.txt y
+# constraints.txt; lo vigila tests/seguridad/test_ci.py.
+
+strands-agents==1.54.0
+boto3==1.43.82
+pydantic==2.13.4
+botocore==1.43.82

@@ -1,0 +1,189 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CrearPoliticasSoloBajoNuestroPathYSoloTrazadas",
+      "Effect": "Allow",
+      "Action": "iam:CreatePolicy",
+      "Resource": "arn:aws:iam::111122223333:policy/agente-iam/*",
+      "Condition": {
+        "StringLike": {
+          "aws:RequestTag/agente-iam-solicitud": "*"
+        }
+      }
+    },
+    {
+      "Sid": "EtiquetarAlCrearSoloEnNuestroPathYSoloNuestraEtiqueta",
+      "Effect": "Allow",
+      "Action": "iam:TagPolicy",
+      "Resource": "arn:aws:iam::111122223333:policy/agente-iam/*",
+      "Condition": {
+        "StringLike": {
+          "aws:RequestTag/agente-iam-solicitud": "*"
+        }
+      }
+    },
+    {
+      "Sid": "AdjuntarSoloNuestrasPoliticasYSoloAQuienLleveElTecho",
+      "Effect": "Allow",
+      "Action": [
+        "iam:AttachUserPolicy",
+        "iam:AttachRolePolicy"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnLike": {
+          "iam:PolicyARN": "arn:aws:iam::111122223333:policy/agente-iam/*"
+        },
+        "StringEquals": {
+          "iam:PermissionsBoundary": "arn:aws:iam::111122223333:policy/AgenteIAM-Techo"
+        }
+      }
+    },
+    {
+      "Sid": "CrearRolesDePersonaSoloConElTecho",
+      "Effect": "Allow",
+      "Action": "iam:CreateRole",
+      "Resource": "arn:aws:iam::111122223333:role/agente-iam/personas/*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PermissionsBoundary": "arn:aws:iam::111122223333:policy/AgenteIAM-Techo"
+        }
+      }
+    },
+    {
+      "Sid": "EtiquetarYLeerRolesDePersona",
+      "Effect": "Allow",
+      "Action": [
+        "iam:TagRole",
+        "iam:ListRoleTags"
+      ],
+      "Resource": "arn:aws:iam::111122223333:role/agente-iam/personas/*"
+    },
+    {
+      "Sid": "ListarRolesNoTieneRecurso",
+      "Effect": "Allow",
+      "Action": "iam:ListRoles",
+      "Resource": "*"
+    },
+    {
+      "Sid": "LeerYRevalidarEnElMomentoDeAplicar",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetUser",
+        "iam:GetRole",
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:ListPolicyVersions",
+        "iam:ListAttachedUserPolicies",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListUserPolicies",
+        "iam:ListRolePolicies",
+        "iam:SimulateCustomPolicy",
+        "iam:SimulatePrincipalPolicy",
+        "access-analyzer:ValidatePolicy",
+        "access-analyzer:CheckNoNewAccess"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "NuncaPoliticasInlinePorqueNoSePuedenAcotarPorPath",
+      "Effect": "Deny",
+      "Action": [
+        "iam:PutUserPolicy",
+        "iam:PutRolePolicy",
+        "iam:PutGroupPolicy"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "NuncaBorrarSuPropiaTrazabilidad",
+      "Effect": "Deny",
+      "Action": "iam:UntagPolicy",
+      "Resource": "*"
+    },
+    {
+      "Sid": "NuncaReescribirElTecho",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreatePolicyVersion",
+        "iam:SetDefaultPolicyVersion",
+        "iam:DeletePolicy",
+        "iam:DeletePolicyVersion"
+      ],
+      "Resource": "arn:aws:iam::111122223333:policy/AgenteIAM-Techo"
+    },
+    {
+      "Sid": "NuncaQuitarNiCambiarUnPermissionBoundary",
+      "Effect": "Deny",
+      "Action": [
+        "iam:PutUserPermissionsBoundary",
+        "iam:PutRolePermissionsBoundary",
+        "iam:DeleteUserPermissionsBoundary",
+        "iam:DeleteRolePermissionsBoundary"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "NuncaTocarPrincipalsDeAdministracion",
+      "Effect": "Deny",
+      "Action": [
+        "iam:Attach*",
+        "iam:Detach*",
+        "iam:Put*",
+        "iam:Delete*",
+        "iam:Update*",
+        "iam:Add*",
+        "iam:Remove*"
+      ],
+      "Resource": [
+        "arn:aws:iam::111122223333:user/Mateo",
+        "arn:aws:iam::111122223333:role/AgenteIAM-*"
+      ]
+    },
+    {
+      "Sid": "NuncaUnRolFueraDeLaRutaDePersonas",
+      "Effect": "Deny",
+      "Action": "iam:CreateRole",
+      "NotResource": "arn:aws:iam::111122223333:role/agente-iam/personas/*"
+    },
+    {
+      "Sid": "NuncaUnRolDePersonaSinElTecho",
+      "Effect": "Deny",
+      "Action": "iam:CreateRole",
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "iam:PermissionsBoundary": "arn:aws:iam::111122223333:policy/AgenteIAM-Techo"
+        }
+      }
+    },
+    {
+      "Sid": "NuncaCrearIdentidadesNiEscalar",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreateUser",
+        "iam:CreateGroup",
+        "iam:CreateAccessKey",
+        "iam:CreateLoginProfile",
+        "iam:UpdateLoginProfile",
+        "iam:AddUserToGroup",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:CreateServiceLinkedRole",
+        "iam:PassRole",
+        "organizations:*",
+        "sts:AssumeRole",
+        "sts:AssumeRoleWithSAML",
+        "sts:AssumeRoleWithWebIdentity",
+        "sts:GetFederationToken"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "NuncaHablarConElModelo",
+      "Effect": "Deny",
+      "Action": "bedrock:*",
+      "Resource": "*"
+    }
+  ]
+}

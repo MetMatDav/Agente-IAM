@@ -1,0 +1,494 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Agente IAM - pila del runtime. Runtime de AgentCore con autorizador JWT,
+  Lambda del aplicador disparada por el stream de la tabla, cola de fallos
+  con alarma y trail propio de eventos de datos. Cuenta agente-iam, us-east-1.
+
+# Por que existe cada pieza (ESPECIFICACION 2.x, 5 y 7; decisiones D2, D3, D4, D8):
+#
+# - Runtime: el agente analista, detras de un autorizador JWT. Un runtime
+#   acepta un solo modo de entrada, asi que esta pila no admite SigV4. Solo
+#   valida allowedClients (sin allowedAudience: el token de acceso de Cognito
+#   no trae aud, MEDICIONES D.2) y solo deja pasar la cabecera Authorization.
+#   Su grupo de logs NO se declara aqui: lo crea AgentCore (ver la nota tras el
+#   runtime); la salida GrupoLogsRuntime dice cual es.
+# - Aplicador: Lambda que aplica las solicitudes ya aprobadas. La dispara el
+#   stream de la tabla con un filtro (solo filas que pasan a "aprobada"),
+#   relee la fila, corre de uno en uno y, tras 2 reintentos, deja el registro
+#   en una cola de fallos que tiene una alarma con aviso por correo.
+#   Nunca lleva AGENTE_IAM_PERMITIR_AUTOAPROBACION (D2).
+# - Avisos (Fase 23, bloque 3): Lambda que manda un correo por SES cuando una
+#   solicitud pasa por la decision de un aprobador (cuatro estados). Usa el mismo zip que
+#   el aplicador, su propio rol (AgenteIAM-Avisos, en base.yaml) y no
+#   reintenta: un aviso que no sale no es un fallo del circuito.
+# - Trail propio (D3): el trail de Control Tower solo registra eventos de
+#   gestion; las invocaciones del runtime y de la Lambda de aprobacion son de
+#   datos, y el sub de la persona solo esta ahi.
+#
+# Orden de despliegue:
+#   1. Pila de acceso (identidades y Cognito) antes que esta: de ella salen
+#      DiscoveryUrl y ClienteId.
+#   2. Pila base ya desplegada: de ella salen StreamArn y los roles.
+#   3. El operador sube los dos zips de empaquetar.sh al bucket de despliegue
+#      y pasa sus claves como parametros.
+#
+# Lo que NO se despliega aqui: los roles AgenteIAM-Runtime, AgenteIAM-Aplicador
+# y AgenteIAM-Avisos (viven en base.yaml, con su limite de permisos; aqui solo
+# se nombran).
+#
+# Sin etiquetas cortas: la lee yaml.safe_load en tests/seguridad/test_pila_runtime.py.
+
+Parameters:
+  ClaveCodigoRuntime:
+    Type: String
+    Description: Clave del zip del runtime en el bucket de despliegue (la imprime empaquetar.sh).
+    AllowedPattern: "^agente-iam/runtime-[0-9a-f]{12}\\.zip$"
+  ClaveCodigoAplicador:
+    Type: String
+    Description: Clave del zip del aplicador en el bucket de despliegue (la imprime empaquetar.sh).
+    AllowedPattern: "^agente-iam/aplicador-[0-9a-f]{12}\\.zip$"
+  DiscoveryUrl:
+    Type: String
+    Description: URL de descubrimiento OIDC del user pool de Cognito (salida de la pila de acceso).
+    AllowedPattern: "^https://cognito-idp\\.us-east-1\\.amazonaws\\.com/us-east-1_[A-Za-z0-9]+/\\.well-known/openid-configuration$"
+  ClienteId:
+    Type: String
+    Description: Id del cliente de Cognito que puede invocar el runtime (salida de la pila de acceso).
+    AllowedPattern: "^[a-z0-9]{26}$"
+  ClienteWebId:
+    Type: String
+    Default: ""
+    # Fase 23: el cliente de la pagina (agente-iam-web) lo crea la pila web.
+    # Vacio hasta entonces: el autorizador solo conoce al de la CLI. Con valor,
+    # admite a los dos y el aplicador escribe los dos en la confianza de los roles.
+    Description: Id del cliente de Cognito de la pagina web (salida de la pila web). Vacio hasta que exista.
+    AllowedPattern: "^([a-z0-9]{26})?$"
+  StreamArn:
+    Type: String
+    Description: ARN del stream de la tabla agente-iam-solicitudes (salida StreamArn de la pila base).
+    AllowedPattern: "^arn:aws:dynamodb:us-east-1:[0-9]{12}:table/agente-iam-solicitudes/stream/.+$"
+  CorreoAlarmas:
+    Type: String
+    Description: Correo que recibe el aviso de la alarma. Dato personal - se pasa al desplegar, nunca va en el repositorio.
+    AllowedPattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+  CorreoRemitente:
+    Type: String
+    Description: Identidad de SES verificada desde la que salen los avisos. Dato personal - se pasa al desplegar, nunca va en el repositorio.
+    AllowedPattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+  UrlWebAvisos:
+    Type: String
+    Default: ""
+    Description: URL de la pagina (salida UrlWeb de la pila web), para el enlace del aviso de aplicada. Vacia, el correo sale sin enlace.
+    AllowedPattern: "^(https://[a-z0-9]+\\.cloudfront\\.net|https://agente-iam\\.mateo\\.solutions)?$"
+  ModelId:
+    Type: String
+    Default: us.anthropic.claude-haiku-4-5-20251001-v1:0
+    Description: Perfil de inferencia del modelo. La SCP solo deja perfiles us.
+    AllowedPattern: "^us\\.anthropic\\.claude-.+$"
+
+Conditions:
+  ConWeb:
+    Fn::Not:
+      - Fn::Equals:
+          - Ref: ClienteWebId
+          - ""
+
+Resources:
+  # --- Runtime --------------------------------------------------------------
+
+  Runtime:
+    Type: AWS::BedrockAgentCore::Runtime
+    Properties:
+      AgentRuntimeName: agente_iam_analista
+      Description: Agente IAM - analista de solicitudes de permisos
+      RoleArn:
+        Fn::Sub: "arn:aws:iam::${AWS::AccountId}:role/AgenteIAM-Runtime"
+      NetworkConfiguration:
+        NetworkMode: PUBLIC
+      ProtocolConfiguration: HTTP
+      AgentRuntimeArtifact:
+        CodeConfiguration:
+          Code:
+            S3:
+              Bucket:
+                Fn::Sub: "agente-iam-despliegue-${AWS::AccountId}"
+              Prefix:
+                Ref: ClaveCodigoRuntime
+          Runtime: PYTHON_3_12
+          EntryPoint:
+            - main.py
+      # Sin AWS_REGION ni DIR_CACHE_CATALOGO: main.py fija el catalogo desde su
+      # propia ruta.
+      EnvironmentVariables:
+        ALMACEN: dynamodb
+        TABLA_SOLICITUDES: agente-iam-solicitudes
+        MODEL_ID:
+          Ref: ModelId
+      AuthorizerConfiguration:
+        CustomJWTAuthorizer:
+          DiscoveryUrl:
+            Ref: DiscoveryUrl
+          # Sin ClienteWebId es exactamente [ClienteId]; con el, los dos clientes.
+          AllowedClients:
+            Fn::If:
+              - ConWeb
+              - - Ref: ClienteId
+                - Ref: ClienteWebId
+              - - Ref: ClienteId
+      RequestHeaderConfiguration:
+        RequestHeaderAllowlist:
+          - Authorization
+      Tags:
+        proyecto: agente-iam
+
+  # Sin grupo de logs del runtime (D8): AgentCore crea el grupo
+  # /aws/bedrock-agentcore/runtimes/<AgentRuntimeId>-DEFAULT el mismo al crear
+  # el runtime. Medido el 25-10-2026: declararlo aqui fallo con AlreadyExists y
+  # toda la pila hizo rollback. Por eso la pila no lo declara y la retencion de
+  # 365 dias la pone el administrador con put-retention-policy tras el primer
+  # despliegue (la salida GrupoLogsRuntime da el nombre). El grupo sobrevive al
+  # runtime, como se midio el 23-10-2026 con el eco.
+
+  # --- Aplicador ------------------------------------------------------------
+
+  ColaFallos:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: agente-iam-aplicador-fallos
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      Tags:
+        - Key: proyecto
+          Value: agente-iam
+
+  RegistroAplicador:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: /aws/lambda/agente-iam-aplicador
+      RetentionInDays: 365
+
+  # Sin ReservedConcurrentExecutions a proposito: el stream entrega un registro
+  # por lote y el aplicador es idempotente (nombre determinista y `decidir`
+  # observa AWS), asi que no hace falta serializarlo. Ademas, una reserva
+  # falla al crear la funcion en una cuenta con la cuota de Lambda por defecto
+  # de las cuentas nuevas (10): Lambda exige dejar al menos 10 sin reservar.
+  # Sin AGENTE_IAM_PERMITIR_AUTOAPROBACION (D2) y sin AWS_REGION (la pone Lambda).
+  FuncionAplicador:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: agente-iam-aplicador
+      Description: "Agente IAM - aplicador. Aplica la solicitud aprobada que le entrega el stream de la tabla."
+      Runtime: python3.12
+      Architectures:
+        - arm64
+      Handler: agente_iam.aplicador.manejador
+      Role:
+        Fn::Sub: "arn:aws:iam::${AWS::AccountId}:role/AgenteIAM-Aplicador"
+      Code:
+        S3Bucket:
+          Fn::Sub: "agente-iam-despliegue-${AWS::AccountId}"
+        S3Key:
+          Ref: ClaveCodigoAplicador
+      Timeout: 120
+      MemorySize: 512
+      Environment:
+        Variables:
+          ALMACEN: dynamodb
+          TABLA_SOLICITUDES: agente-iam-solicitudes
+          DIR_CACHE_CATALOGO: /var/task/catalogo
+          # Fase 23: con ellos el aplicador escribe la confianza del rol de
+          # persona (<host>/<pool>:aud y :sub). El id del pool sale de la URL
+          # de descubrimiento partida por "/": "https:", "", el host y el pool
+          # (indice 3), asi no hace falta un parametro mas. Los clientes son
+          # los mismos que admite el autorizador del runtime. El Runtime no
+          # recibe estas variables: no escribe en IAM.
+          AGENTE_IAM_POOL_ID:
+            Fn::Select:
+              - 3
+              - Fn::Split:
+                  - "/"
+                  - Ref: DiscoveryUrl
+          AGENTE_IAM_CLIENTES:
+            Fn::If:
+              - ConWeb
+              - Fn::Sub: "${ClienteId},${ClienteWebId}"
+              - Ref: ClienteId
+      LoggingConfig:
+        LogGroup:
+          Ref: RegistroAplicador
+      Tags:
+        - Key: proyecto
+          Value: agente-iam
+
+  # Solo despierta con filas que pasan a "aprobada" (INSERT o MODIFY). La
+  # funcion relee la fila antes de actuar: el evento solo avisa. Lote de 1,
+  # 2 reintentos y, si siguen los fallos, el registro va a la cola.
+  DisparadorAplicador:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn:
+        Ref: StreamArn
+      FunctionName:
+        Ref: FuncionAplicador
+      StartingPosition: LATEST
+      BatchSize: 1
+      MaximumRetryAttempts: 2
+      BisectBatchOnFunctionError: false
+      MaximumRecordAgeInSeconds: 3600
+      Enabled: true
+      DestinationConfig:
+        OnFailure:
+          Destination:
+            Fn::GetAtt: [ColaFallos, Arn]
+      FilterCriteria:
+        Filters:
+          - Pattern: '{"eventName":["INSERT","MODIFY"],"dynamodb":{"NewImage":{"estado":{"S":["aprobada"]}}}}'
+
+  # --- Avisos por correo ----------------------------------------------------
+
+  RegistroAvisos:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: /aws/lambda/agente-iam-avisos
+      RetentionInDays: 365
+
+  # Mismo zip que el aplicador (avisos.py viaja con el): ni clave ni parametro
+  # nuevo. Sin AWS_REGION (la pone Lambda) y sin AGENTE_IAM_PERMITIR_AUTOAPROBACION.
+  # Sin DependsOn: LoggingConfig ya referencia el grupo con Ref, que ordena la
+  # creacion (cfn-lint W3005 avisa si se repite). Asi el grupo existe antes que
+  # la funcion y Lambda no crea uno sin retencion y fuera de la pila.
+  FuncionAvisos:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: agente-iam-avisos
+      Description: "Agente IAM - avisos. Manda un correo cuando una solicitud acaba algo para la persona."
+      Runtime: python3.12
+      Architectures:
+        - arm64
+      Handler: agente_iam.avisos.manejador
+      Role:
+        Fn::Sub: "arn:aws:iam::${AWS::AccountId}:role/AgenteIAM-Avisos"
+      Code:
+        S3Bucket:
+          Fn::Sub: "agente-iam-despliegue-${AWS::AccountId}"
+        S3Key:
+          Ref: ClaveCodigoAplicador
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          AGENTE_IAM_REMITENTE:
+            Ref: CorreoRemitente
+          # Fase 28: el aviso de `aplicada` lleva el enlace a la pagina con el id.
+          # Vacio: el correo sale sin enlace.
+          AGENTE_IAM_URL_WEB:
+            Ref: UrlWebAvisos
+      LoggingConfig:
+        LogGroup:
+          Ref: RegistroAvisos
+      Tags:
+        - Key: proyecto
+          Value: agente-iam
+
+  # Sin reintentos ni cola de fallos, a diferencia del aplicador: un aviso que
+  # no sale (SES rechaza una direccion no verificada, por ejemplo) no es un
+  # fallo del circuito, queda en el log y ya. El filtro mira solo la fila nueva
+  # (NewImage): el filtro de Lambda no compara dos atributos, asi que decidir si
+  # el estado cambio de verdad respecto al anterior lo hace el codigo con
+  # OldImage. Lote de 1: un correo por evento.
+  DisparadorAvisos:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn:
+        Ref: StreamArn
+      FunctionName:
+        Ref: FuncionAvisos
+      StartingPosition: LATEST
+      BatchSize: 1
+      MaximumRetryAttempts: 0
+      BisectBatchOnFunctionError: false
+      Enabled: true
+      FilterCriteria:
+        Filters:
+          - Pattern: '{"eventName":["INSERT","MODIFY"],"dynamodb":{"NewImage":{"estado":{"S":["aprobada","rechazada_por_aprobador","aplicada","bloqueada_al_aplicar"]}}}}'
+
+  # --- Alarma ---------------------------------------------------------------
+
+  TemaAlarmas:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: agente-iam-alarmas
+      Tags:
+        - Key: proyecto
+          Value: agente-iam
+
+  SuscripcionCorreo:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn:
+        Ref: TemaAlarmas
+      Protocol: email
+      Endpoint:
+        Ref: CorreoAlarmas
+
+  # Cualquier mensaje en la cola de fallos es una solicitud aprobada que no
+  # se pudo aplicar: avisa en el primer minuto.
+  AlarmaFallos:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: agente-iam-aplicador-fallos
+      AlarmDescription: Hay solicitudes aprobadas que el aplicador no pudo aplicar (cola de fallos con mensajes).
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value:
+            Fn::GetAtt: [ColaFallos, QueueName]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - Ref: TemaAlarmas
+
+  # --- Trail de eventos de datos (D3) ----------------------------------------
+
+  BucketTrail:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName:
+        Fn::Sub: "agente-iam-trail-datos-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: caducidad-90-dias
+            Status: Enabled
+            ExpirationInDays: 90
+      Tags:
+        - Key: proyecto
+          Value: agente-iam
+
+  PoliticaBucketTrail:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: BucketTrail
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: CloudTrailCompruebaLaAcl
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource:
+              Fn::GetAtt: [BucketTrail, Arn]
+            Condition:
+              StringEquals:
+                aws:SourceArn:
+                  Fn::Sub: "arn:aws:cloudtrail:us-east-1:${AWS::AccountId}:trail/agente-iam-datos"
+          - Sid: CloudTrailEscribeSoloSusRegistros
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource:
+              Fn::Sub: "${BucketTrail.Arn}/AWSLogs/${AWS::AccountId}/*"
+            Condition:
+              StringEquals:
+                aws:SourceArn:
+                  Fn::Sub: "arn:aws:cloudtrail:us-east-1:${AWS::AccountId}:trail/agente-iam-datos"
+          - Sid: SoloTLS
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - Fn::GetAtt: [BucketTrail, Arn]
+              - Fn::Sub: "${BucketTrail.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # Sin eventos de gestion (el trail de Control Tower ya los registra y una
+  # segunda copia es de pago). Solo dos recursos de datos: el runtime y la
+  # Lambda de aprobacion (donde queda el sub de quien aprueba).
+  TrailDatos:
+    Type: AWS::CloudTrail::Trail
+    DependsOn: PoliticaBucketTrail
+    Properties:
+      TrailName: agente-iam-datos
+      S3BucketName:
+        Ref: BucketTrail
+      IsLogging: true
+      IsMultiRegionTrail: false
+      IncludeGlobalServiceEvents: false
+      EnableLogFileValidation: true
+      AdvancedEventSelectors:
+        - Name: Eventos de datos del runtime de AgentCore
+          FieldSelectors:
+            - Field: eventCategory
+              Equals:
+                - Data
+            - Field: resources.type
+              Equals:
+                - AWS::BedrockAgentCore::Runtime
+        - Name: Eventos de datos de la Lambda de aprobacion
+          FieldSelectors:
+            - Field: eventCategory
+              Equals:
+                - Data
+            - Field: resources.type
+              Equals:
+                - AWS::Lambda::Function
+            - Field: resources.ARN
+              Equals:
+                - Fn::Sub: "arn:aws:lambda:us-east-1:${AWS::AccountId}:function:agente-iam-aprobacion"
+      Tags:
+        - Key: proyecto
+          Value: agente-iam
+
+Outputs:
+  GrupoLogsRuntime:
+    Description: Grupo de logs que crea AgentCore. El administrador le pone retencion de 365 dias tras el primer despliegue.
+    Value:
+      Fn::Sub: "/aws/bedrock-agentcore/runtimes/${Runtime.AgentRuntimeId}-DEFAULT"
+  RuntimeArn:
+    Value:
+      Fn::GetAtt: [Runtime, AgentRuntimeArn]
+  RuntimeId:
+    Value:
+      Fn::GetAtt: [Runtime, AgentRuntimeId]
+  FuncionAplicadorArn:
+    Value:
+      Fn::GetAtt: [FuncionAplicador, Arn]
+  FuncionAvisosArn:
+    Value:
+      Fn::GetAtt: [FuncionAvisos, Arn]
+  ColaFallosArn:
+    Value:
+      Fn::GetAtt: [ColaFallos, Arn]
+  TrailArn:
+    Value:
+      Fn::GetAtt: [TrailDatos, Arn]
+  TemaAlarmasArn:
+    Value:
+      Ref: TemaAlarmas

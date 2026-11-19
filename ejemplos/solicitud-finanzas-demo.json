@@ -1,0 +1,11 @@
+{
+  "solicitud_id": "req-020-finanzas-demo",
+  "principal_arn_declarado": "arn:aws:iam::111122223333:role/app-finanzas-demo",
+  "campos": {
+    "servicio": "s3",
+    "recurso": "finanzas-demo-111122223333",
+    "tipo_acceso": "lectura",
+    "region": "us-east-1"
+  },
+  "justificacion": "La aplicacion de finanzas necesita listar y descargar los informes del bucket para el cierre mensual."
+}

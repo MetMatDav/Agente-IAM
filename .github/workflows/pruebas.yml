@@ -1,0 +1,88 @@
+# Unitarios y seguridad en cada push y pull request (Fase 12).
+#
+# Llama al mismo scripts/pruebas.sh que se usa en local, asi que en CI se
+# comprueba lo mismo que en el equipo de Mateo, y sube la evidencia de cada
+# tipo como artifact. Los funcionales NO corren aqui: tocan la cuenta real
+# y necesitarian credenciales (OIDC y un rol propio); se decide despues.
+#
+# Seguridad del propio workflow:
+#   - permisos de solo lectura sobre el repositorio;
+#   - cada accion fijada por commit (no por etiqueta, que se puede mover);
+#   - checkout sin guardar el token en .git/config.
+name: pruebas
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pruebas-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pruebas:
+    name: ${{ matrix.tipo }}
+    # Fijado: ubuntu-latest pasa a Ubuntu 26 desde el 19-10-2026 (aviso de
+    # GitHub en la primera ejecucion) y cambiaria el entorno sin avisar.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        tipo: [unitarios, seguridad]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          # Historial entero: gitleaks lo recorre commit a commit (O1). Un
+          # secreto que entro y se borro despues sigue expuesto.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            constraints.txt
+
+      - name: Dependencias
+        # -c constraints.txt: las mismas versiones exactas que el .venv local.
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt -c constraints.txt
+
+      - name: Secretos en el repositorio y su historial (gitleaks)
+        if: matrix.tipo == 'seguridad'
+        # Hasta el 24-10-2026 era `pre-commit run gitleaks --all-files`, y el
+        # hook de gitleaks es `gitleaks protect --staged`: en un checkout
+        # limpio no hay nada en el indice y salia 0 sin mirar nada (O1).
+        # Ahora `gitleaks git` sobre todo el historial, con el binario de la
+        # version de .pre-commit-config.yaml fijado por su sha256 (el de
+        # gitleaks_8.21.2_checksums.txt de la release), como el resto de
+        # piezas de este workflow. El hook se salta con --no-verify; esto no.
+        env:
+          GITLEAKS_VERSION: 8.21.2
+          GITLEAKS_SHA256: 5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git --redact --verbose --exit-code 1 .
+
+      - name: Tests (${{ matrix.tipo }})
+        env:
+          PYTHON: python
+        run: scripts/pruebas.sh ${{ matrix.tipo }}
+
+      - name: Evidencia
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: evidencias-${{ matrix.tipo }}
+          path: evidencias/
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,92 @@
+# Agente IAM - pila de beneficiarios de demo (pila agente-iam-beneficiarios).
+#
+# Por que existe: el aplicador solo adjunta permisos a quien lleva el techo
+# (AgenteIAM-Techo) como permission boundary, y hoy ningun principal de la
+# cuenta lo lleva. Sin un beneficiario real no hay prueba de punta a punta.
+# Esta pila crea el mas pequeno: el rol de una aplicacion de demo (finanzas) y
+# un bucket de prueba sobre el que pedirle permisos al agente.
+#
+# El rol nace SIN permisos (ni Policies ni ManagedPolicyArns): lo que tenga
+# se lo dara el aplicador, tras la aprobacion de una persona.
+#
+# Por que la despliega el ADMINISTRADOR y no el operador: el rol de despliegue
+# (AgenteIAM-Despliegue) solo crea roles con AgenteIAM-LimiteSistema como
+# boundary, y un beneficiario lleva el techo. Es a proposito: el operador no
+# puede fabricar principales con un limite distinto al del sistema.
+#
+# Los nombres NO empiezan por ningun prefijo del sistema (agente-iam,
+# agente_iam, agenteiam): el chequeo 6 y el techo rechazarian darle permisos
+# sobre recursos con ese nombre.
+#
+# Es demo: sin Retain. Borrar la pila quita el rol y el bucket (vacio).
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Agente IAM - beneficiarios de demo (un rol con el techo y un bucket de prueba)
+Resources:
+  RolDemo:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: app-finanzas-demo
+      Description: Rol de una aplicacion de demo (finanzas) que recibe permisos del agente. Nace sin permisos y lleva el techo.
+      PermissionsBoundary:
+        Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AgenteIAM-Techo
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+          Condition:
+            StringEquals:
+              aws:SourceAccount:
+                Fn::Sub: ${AWS::AccountId}
+      Tags:
+      - Key: proyecto
+        Value: agente-iam
+  BucketDemo:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: finanzas-demo-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+        - ObjectOwnership: BucketOwnerEnforced
+      Tags:
+      - Key: proyecto
+        Value: agente-iam
+  PoliticaBucketDemo:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: BucketDemo
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: SoloConTLS
+          Effect: Deny
+          Principal: '*'
+          Action: s3:*
+          Resource:
+          - Fn::Sub: arn:aws:s3:::finanzas-demo-${AWS::AccountId}
+          - Fn::Sub: arn:aws:s3:::finanzas-demo-${AWS::AccountId}/*
+          Condition:
+            Bool:
+              aws:SecureTransport: 'false'
+Outputs:
+  RolDemoArn:
+    Value:
+      Fn::GetAtt:
+      - RolDemo
+      - Arn
+  BucketDemo:
+    Value:
+      Ref: BucketDemo

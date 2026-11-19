@@ -1,0 +1,32 @@
+# Dependencias del agente. Las versiones estan FIJADAS a proposito.
+#
+# Hasta el despliegue esto era deuda menor; con un artefacto que se sube a
+# la nube deja de serlo. El dia que se escribio este archivo, resolver sin
+# fijar daba boto3 1.43.85 y pydantic 2.13.5, mientras que la bateria de
+# tests habia corrido contra 1.43.82 y 2.13.4: el paquete desplegado NO
+# habria sido el que se probo. Para subirlas: se cambia el numero aqui, se
+# corren los tests, y se vuelve a empaquetar.
+#
+# Se instalan tambien para el paquete de despliegue, pero compiladas para
+# aarch64 — ver `scripts/empaquetar.sh`.
+
+strands-agents==1.54.0
+boto3==1.43.82
+
+# Se importan directamente (24-10-2026, revision O17): pydantic en models.py,
+# aprobar.py, aplicador.py, cli.py y servidor.py; botocore (sus excepciones)
+# en almacen.py, aprobar.py, aplicador.py e identidad.py. Llegaban solo por
+# strands-agents y boto3: si una dejara de arrastrarlas, el zip saldria sin ellas.
+# Mismas versiones que constraints.txt; lo vigila test_ci.py.
+pydantic==2.13.4
+botocore==1.43.82
+
+# El servidor de AgentCore Runtime: aporta /invocations y /ping en 8080.
+# Solo lo usa `servidor.py`; el CLI y los tests no lo necesitan, y por eso
+# `servidor._request_id()` tolera que no este instalado.
+bedrock-agentcore==1.22.0
+
+# NOTA: `strands-agents-tools` estaba aqui y se quito. No se importa en
+# ninguna parte del proyecto (las dos tools son nuestras, decoradas con
+# `@tool`), y arrastraba pillow, mcp, beautifulsoup4 y mas al paquete que
+# se sube. Una dependencia que no se usa es peso y superficie de ataque.

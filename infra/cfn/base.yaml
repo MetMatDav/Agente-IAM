@@ -1,0 +1,891 @@
+# Agente IAM - pila base de la cuenta agente-iam (Fase 18, tarea 5, 24-10-2026).
+#
+# Por que existe: aqui vive la fila de cada solicitud y quien puede escribir
+# en ella. El reparto es el del mapa del flujo (local/mapas/solicitud-por-la-tabla.md):
+# un atributo por actor, y cada rol solo los suyos, con dynamodb:Attributes.
+#   runtime    id, documento, estado     (el intake: crea, nunca pisa)
+#   aplicador  id, estado, aplicacion    (deja constancia de lo que hizo)
+#   aprobacion id, estado, aprobacion, rechazo   (la decision de la persona)
+# aprobacion y rechazo los escribe el rol de la Lambda de aprobacion (ADR-003,
+# 24-10-2026) y ningun otro: la persona firma una peticion a su URL (AWS_IAM) y
+# la Lambda, que ve quien firmo, corre los controles y escribe. El permission
+# set del aprobador solo lee. El codigo de la Lambda entra como zip en el
+# bucket (scripts/empaquetar.sh aprobacion imprime la clave).
+# Nadie tiene PutItem: reemplaza la fila entera y dynamodb:Attributes no lo
+# limita. Tampoco DeleteItem ni BatchWriteItem: a quien escribe su rastro se le
+# quita borrarlo (la leccion de iam:UntagPolicy). El Null en false es
+# obligatorio: ForAllValues con la clave ausente da verdadero.
+#
+# Los permisos de IAM del runtime son los del JSON de la Fase 8 (retirado el
+# 24-10-2026, en git) con DynamoDB acotado; los del aplicador, los de
+# infra/rol-aplicador-permisos.json (que sigue
+# siendo la del aplicador de la cuenta de gestion); los tests de
+# tests/seguridad/test_pila_base.py fijan que el aplicador sea el mismo.
+# Los tres roles llevan AgenteIAM-LimiteSistema como boundary (lo exige el rol
+# de despliegue).
+#
+# Fase 23, bloque 3 (26-10-2026): el cuarto rol, AgenteIAM-Avisos, es el de la
+# Lambda que manda un correo cuando una solicitud acaba algo para la persona.
+# Solo lee el stream y manda correo desde una identidad de SES: no puede leer
+# la tabla ni escribirla, ni tocar IAM, ni hablar con el modelo.
+#
+# La tabla, el bucket, su politica y el grupo de logs de la aprobacion se
+# retienen al borrar la pila: son el producto auditable.
+# La despliega el operador pasando AgenteIAM-Despliegue (CAPABILITY_NAMED_IAM).
+#
+# Sin etiquetas cortas: la lee yaml.safe_load en los tests.
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Agente IAM - pila base de la cuenta agente-iam: la tabla de solicitudes, el bucket del paquete, los roles del
+  runtime, del aplicador y de la aprobacion y la Lambda de aprobacion. La despliega el operador con AgenteIAM-Despliegue.'
+Parameters:
+  CorreoRemitente:
+    Type: String
+    # Sin defecto: es un dato personal y no va al repositorio. Entra al
+    # desplegar. Es la direccion que verifica Mateo en SES; el rol de avisos
+    # solo puede mandar desde ella.
+    AllowedPattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+    ConstraintDescription: Debe ser una direccion de correo.
+    Description: Identidad de SES verificada desde la que salen los avisos por correo.
+  ClaveCodigoAprobacion:
+    Type: String
+    # La que imprime scripts/empaquetar.sh aprobacion tras subir el zip. Sin
+    # defecto: cada despliegue nombra el paquete que quiere, y el nombre lleva
+    # los doce primeros del sha256 del contenido.
+    AllowedPattern: ^agente-iam/aprobacion-[0-9a-f]{12}\.zip$
+    ConstraintDescription: Debe ser la clave que imprime scripts/empaquetar.sh aprobacion, con la forma agente-iam/aprobacion-<12 hex>.zip
+    Description: Clave S3 del zip de la Lambda de aprobacion, en el bucket agente-iam-despliegue.
+Resources:
+  TablaSolicitudes:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: agente-iam-solicitudes
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: id
+        AttributeType: S
+      KeySchema:
+      - AttributeName: id
+        KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      DeletionProtectionEnabled: true
+  BucketPaquete:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName:
+        Fn::Sub: agente-iam-despliegue-${AWS::AccountId}
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+        - ObjectOwnership: BucketOwnerEnforced
+  PoliticaBucketPaquete:
+    Type: AWS::S3::BucketPolicy
+    # Como el bucket: borrar la pila no quita el Deny de TLS de un bucket que se queda.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Bucket:
+        Ref: BucketPaquete
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: SoloConTLS
+          Effect: Deny
+          Principal: '*'
+          Action: s3:*
+          Resource:
+          - Fn::Sub: arn:aws:s3:::agente-iam-despliegue-${AWS::AccountId}
+          - Fn::Sub: arn:aws:s3:::agente-iam-despliegue-${AWS::AccountId}/*
+          Condition:
+            Bool:
+              aws:SecureTransport: 'false'
+  RolRuntime:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: AgenteIAM-Runtime
+      Description: 'Agente IAM - runtime de AgentCore: lee IAM, valida, invoca el modelo y crea el registro. No escribe en
+        IAM.'
+      PermissionsBoundary:
+        Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AgenteIAM-LimiteSistema
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: bedrock-agentcore.amazonaws.com
+          Action: sts:AssumeRole
+          Condition:
+            StringEquals:
+              aws:SourceAccount:
+                Fn::Sub: ${AWS::AccountId}
+            ArnLike:
+              aws:SourceArn:
+                Fn::Sub: arn:aws:bedrock-agentcore:us-east-1:${AWS::AccountId}:*
+      Policies:
+      - PolicyName: AgenteIAM-Runtime-permisos
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Sid: LeerIAM
+            Effect: Allow
+            Action:
+            - iam:Get*
+            - iam:List*
+            - iam:SimulatePrincipalPolicy
+            - iam:SimulateCustomPolicy
+            Resource: '*'
+          - Sid: ValidarPoliticas
+            Effect: Allow
+            Action: access-analyzer:ValidatePolicy
+            Resource: '*'
+          - Sid: InvocarModelo
+            Effect: Allow
+            Action:
+            - bedrock:InvokeModel
+            - bedrock:InvokeModelWithResponseStream
+            Resource:
+            - arn:aws:bedrock:*::foundation-model/anthropic.claude-*
+            # Region '*' en el perfil (25-10-2026): el perfil geografico us. enruta a
+            # us-east-2 y us-west-2, y la autorizacion en la region de destino se
+            # evalua tambien; con el perfil solo de us-east-1, Converse devolvia
+            # AccessDenied generico desde el runtime (medicion en MEDICIONES).
+            - Fn::Sub: arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/us.anthropic.claude-*
+          - Sid: EscribirSoloSusAtributos
+            Effect: Allow
+            Action:
+            - dynamodb:UpdateItem
+            Resource:
+              Fn::Sub: arn:aws:dynamodb:us-east-1:${AWS::AccountId}:table/agente-iam-solicitudes
+            Condition:
+              ForAllValues:StringEquals:
+                dynamodb:Attributes:
+                - id
+                - documento
+                - estado
+              'Null':
+                dynamodb:Attributes: 'false'
+              StringEqualsIfExists:
+                dynamodb:ReturnValues:
+                - NONE
+                - UPDATED_OLD
+                - UPDATED_NEW
+          - Sid: NuncaReemplazarNiBorrarFilas
+            Effect: Deny
+            Action:
+            - dynamodb:PutItem
+            - dynamodb:DeleteItem
+            - dynamodb:BatchWriteItem
+            - dynamodb:DeleteTable
+            - dynamodb:UpdateTable
+            # PartiQL escribe filas por otro camino; TTL y backups continuos
+            # borran filas o quitan el rastro (PITR) sin pasar por UpdateItem.
+            - dynamodb:PartiQL*
+            - dynamodb:UpdateTimeToLive
+            - dynamodb:UpdateContinuousBackups
+            Resource: '*'
+          - Sid: LeerElPaqueteDeCodigo
+            Effect: Allow
+            Action:
+            - s3:GetObject
+            - s3:GetObjectVersion
+            Resource:
+              Fn::Sub: arn:aws:s3:::agente-iam-despliegue-${AWS::AccountId}/agente-iam/*
+          - Sid: LogsDeAgentCore
+            Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            - logs:DescribeLogStreams
+            - logs:DescribeLogGroups
+            Resource:
+              Fn::Sub: arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*
+          # Fase 28: buscar el recurso pedido antes de llamar al modelo
+          # (agente_iam/existencia.py). Solo metadatos, nunca contenido: S3
+          # lista los buckets de la cuenta (sin tipo de recurso: "*"), Lambda
+          # pide las etiquetas y no la configuracion (trae las variables de
+          # entorno). DescribeLogGroups no tiene tipo de recurso: con un ARN no
+          # se concederia nunca.
+          - Sid: ComprobarQueElRecursoExiste
+            Effect: Allow
+            Action:
+            - dynamodb:DescribeTable
+            - sqs:GetQueueUrl
+            - sns:GetTopicAttributes
+            - cloudwatch:DescribeAlarms
+            - lambda:ListTags
+            Resource:
+            - Fn::Sub: arn:aws:dynamodb:us-east-1:${AWS::AccountId}:table/*
+            - Fn::Sub: arn:aws:sqs:us-east-1:${AWS::AccountId}:*
+            - Fn::Sub: arn:aws:sns:us-east-1:${AWS::AccountId}:*
+            - Fn::Sub: arn:aws:cloudwatch:us-east-1:${AWS::AccountId}:alarm:*
+            - Fn::Sub: arn:aws:lambda:us-east-1:${AWS::AccountId}:function:*
+          - Sid: ComprobarQueElRecursoExisteSinTipoDeRecurso
+            Effect: Allow
+            Action:
+            - s3:ListAllMyBuckets
+            - logs:DescribeLogGroups
+            Resource: "*"
+          - Sid: TrazasYMetricasDeAgentCore
+            Effect: Allow
+            Action:
+            - xray:PutTraceSegments
+            - xray:PutTelemetryRecords
+            - xray:GetSamplingRules
+            - xray:GetSamplingTargets
+            Resource: '*'
+          - Sid: MetricasSoloEnElNamespaceDeAgentCore
+            Effect: Allow
+            Action: cloudwatch:PutMetricData
+            Resource: '*'
+            Condition:
+              StringEquals:
+                cloudwatch:namespace: bedrock-agentcore
+          - Sid: NuncaEscribirEnIAM
+            Effect: Deny
+            Action:
+            - iam:Create*
+            - iam:Put*
+            - iam:Attach*
+            - iam:Detach*
+            - iam:Delete*
+            - iam:Update*
+            - iam:Add*
+            - iam:Remove*
+            - iam:Set*
+            - iam:Tag*
+            - iam:Untag*
+            - iam:Upload*
+            - iam:Change*
+            - iam:Enable*
+            - iam:Deactivate*
+            - iam:Reset*
+            - iam:Resync*
+            - iam:PassRole
+            - organizations:*
+            - sts:AssumeRole
+            - sts:AssumeRoleWithSAML
+            - sts:AssumeRoleWithWebIdentity
+            - sts:GetFederationToken
+            Resource: '*'
+  RolAplicador:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: AgenteIAM-Aplicador
+      Description: 'Agente IAM - Lambda del aplicador: aplica lo aprobado y escribe su bloque. No habla con el modelo.'
+      PermissionsBoundary:
+        Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AgenteIAM-LimiteSistema
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+          Condition:
+            StringEquals:
+              aws:SourceAccount:
+                Fn::Sub: ${AWS::AccountId}
+            # Sin aws:SourceArn a proposito: el disparador del stream (event source
+            # mapping) valida la confianza sin aportar aws:SourceArn y rechaza el
+            # rol si la exige (medido el 25-10-2026); la funcion si se crea con
+            # ella. Queda aws:SourceAccount: solo funciones de esta cuenta, y dentro
+            # de la cuenta solo el rol de despliegue puede pasar roles AgenteIAM-* a Lambda.
+      Policies:
+      - PolicyName: AgenteIAM-Aplicador-permisos
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Sid: CrearPoliticasSoloBajoNuestroPathYSoloTrazadas
+            Effect: Allow
+            Action: iam:CreatePolicy
+            Resource:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/agente-iam/*
+            Condition:
+              StringLike:
+                aws:RequestTag/agente-iam-solicitud: '*'
+          - Sid: EtiquetarAlCrearSoloEnNuestroPathYSoloNuestraEtiqueta
+            Effect: Allow
+            Action: iam:TagPolicy
+            Resource:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/agente-iam/*
+            Condition:
+              StringLike:
+                aws:RequestTag/agente-iam-solicitud: '*'
+          - Sid: AdjuntarSoloNuestrasPoliticasYSoloAQuienLleveElTecho
+            Effect: Allow
+            Action:
+            - iam:AttachUserPolicy
+            - iam:AttachRolePolicy
+            Resource: '*'
+            Condition:
+              ArnLike:
+                iam:PolicyARN:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/agente-iam/*
+              StringEquals:
+                iam:PermissionsBoundary:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AgenteIAM-Techo
+          # Fase 23: el aplicador crea el rol de la persona. Solo bajo la ruta
+          # /agente-iam/personas/ (el ARN de un rol lleva su ruta, asi que el
+          # Resource ya acota donde nace) y solo con el techo como boundary: el
+          # rol nunca puede concederse mas de lo que el techo permite. La
+          # condicion se repite abajo como Deny (cinturon y tirantes).
+          - Sid: CrearRolesDePersonaSoloConElTecho
+            Effect: Allow
+            Action: iam:CreateRole
+            Resource:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/agente-iam/personas/*
+            Condition:
+              StringEquals:
+                iam:PermissionsBoundary:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AgenteIAM-Techo
+          # CreateRole con etiquetas exige iam:TagRole sobre el rol nuevo (las
+          # etiquetas van dentro de la creacion, atomico); TagRole tambien sirve
+          # al reintento que repara las etiquetas de un rol a medio crear.
+          # ListRoleTags lee la etiqueta de vencimiento al reanudar. Misma ruta.
+          - Sid: EtiquetarYLeerRolesDePersona
+            Effect: Allow
+            Action:
+            - iam:TagRole
+            - iam:ListRoleTags
+            Resource:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/agente-iam/personas/*
+          # ListRoles no admite recurso: solo se concede con Resource "*". Lo
+          # necesita el tope de roles vigentes por persona al aplicar (lista la
+          # ruta de personas y lee las etiquetas con ListRoleTags, que va acotado).
+          - Sid: ListarRolesNoTieneRecurso
+            Effect: Allow
+            Action: iam:ListRoles
+            Resource: '*'
+          - Sid: LeerYRevalidarEnElMomentoDeAplicar
+            Effect: Allow
+            Action:
+            - iam:GetUser
+            - iam:GetRole
+            - iam:GetPolicy
+            - iam:GetPolicyVersion
+            - iam:ListPolicyVersions
+            - iam:ListAttachedUserPolicies
+            - iam:ListAttachedRolePolicies
+            - iam:ListUserPolicies
+            - iam:ListRolePolicies
+            - iam:SimulateCustomPolicy
+            - iam:SimulatePrincipalPolicy
+            - access-analyzer:ValidatePolicy
+            - access-analyzer:CheckNoNewAccess
+            Resource: '*'
+          - Sid: NuncaPoliticasInlinePorqueNoSePuedenAcotarPorPath
+            Effect: Deny
+            Action:
+            - iam:PutUserPolicy
+            - iam:PutRolePolicy
+            - iam:PutGroupPolicy
+            Resource: '*'
+          - Sid: NuncaBorrarSuPropiaTrazabilidad
+            Effect: Deny
+            Action: iam:UntagPolicy
+            Resource: '*'
+          - Sid: NuncaReescribirElTecho
+            Effect: Deny
+            Action:
+            - iam:CreatePolicyVersion
+            - iam:SetDefaultPolicyVersion
+            - iam:DeletePolicy
+            - iam:DeletePolicyVersion
+            Resource:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AgenteIAM-Techo
+          - Sid: NuncaQuitarNiCambiarUnPermissionBoundary
+            Effect: Deny
+            Action:
+            - iam:PutUserPermissionsBoundary
+            - iam:PutRolePermissionsBoundary
+            - iam:DeleteUserPermissionsBoundary
+            - iam:DeleteRolePermissionsBoundary
+            Resource: '*'
+          - Sid: NuncaTocarPrincipalsDeAdministracion
+            Effect: Deny
+            Action:
+            - iam:Attach*
+            - iam:Detach*
+            - iam:Put*
+            - iam:Delete*
+            - iam:Update*
+            - iam:Add*
+            - iam:Remove*
+            Resource:
+            - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/AgenteIAM-*
+          # Un Deny gana a cualquier Allow, tambien a uno que se anada manana
+          # por error. Este: ningun rol nace fuera de la ruta de personas (NotResource
+          # = todo lo que no sea esa ruta, incluidos los AgenteIAM-* del sistema).
+          - Sid: NuncaUnRolFueraDeLaRutaDePersonas
+            Effect: Deny
+            Action: iam:CreateRole
+            NotResource:
+              Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/agente-iam/personas/*
+          # Y este: ningun rol nace sin el techo. StringNotEquals con la clave
+          # ausente (CreateRole sin boundary) da verdadero y deniega, que es lo
+          # que se quiere (MEDICIONES H 11 y 30). Nunca ...IfExists en un Deny:
+          # dejaria pasar la llamada sin la clave.
+          - Sid: NuncaUnRolDePersonaSinElTecho
+            Effect: Deny
+            Action: iam:CreateRole
+            Resource: '*'
+            Condition:
+              StringNotEquals:
+                iam:PermissionsBoundary:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AgenteIAM-Techo
+          # iam:CreateRole sale de esta lista porque ahora solo se permite en la
+          # ruta de personas con el techo (los dos Deny de arriba lo vigilan).
+          - Sid: NuncaCrearIdentidadesNiEscalar
+            Effect: Deny
+            Action:
+            - iam:CreateUser
+            - iam:CreateGroup
+            - iam:CreateAccessKey
+            - iam:CreateLoginProfile
+            - iam:UpdateLoginProfile
+            - iam:AddUserToGroup
+            - iam:UpdateAssumeRolePolicy
+            - iam:CreateServiceLinkedRole
+            - iam:PassRole
+            - organizations:*
+            - sts:AssumeRole
+            - sts:AssumeRoleWithSAML
+            - sts:AssumeRoleWithWebIdentity
+            - sts:GetFederationToken
+            Resource: '*'
+          - Sid: NuncaHablarConElModelo
+            Effect: Deny
+            Action: bedrock:*
+            Resource: '*'
+          - Sid: LeerLaSolicitud
+            Effect: Allow
+            Action:
+            - dynamodb:GetItem
+            Resource:
+              Fn::Sub: arn:aws:dynamodb:us-east-1:${AWS::AccountId}:table/agente-iam-solicitudes
+          - Sid: EscribirSoloSusAtributos
+            Effect: Allow
+            Action:
+            - dynamodb:UpdateItem
+            Resource:
+              Fn::Sub: arn:aws:dynamodb:us-east-1:${AWS::AccountId}:table/agente-iam-solicitudes
+            Condition:
+              ForAllValues:StringEquals:
+                dynamodb:Attributes:
+                - id
+                - estado
+                - aplicacion
+              'Null':
+                dynamodb:Attributes: 'false'
+              StringEqualsIfExists:
+                dynamodb:ReturnValues:
+                - NONE
+                - UPDATED_OLD
+                - UPDATED_NEW
+          - Sid: LeerElStreamDeLaTabla
+            Effect: Allow
+            Action:
+            - dynamodb:DescribeStream
+            - dynamodb:GetRecords
+            - dynamodb:GetShardIterator
+            Resource:
+              Fn::Sub: arn:aws:dynamodb:us-east-1:${AWS::AccountId}:table/agente-iam-solicitudes/stream/*
+          - Sid: ListarStreamsNoTieneRecurso
+            Effect: Allow
+            Action:
+            - dynamodb:ListStreams
+            Resource: '*'
+          # El disparador manda a esta cola los eventos que fallan tras 2
+          # reintentos; lo hace con el rol de la funcion, no con el de Lambda.
+          - Sid: EscribirEnSuColaDeFallos
+            Effect: Allow
+            Action: sqs:SendMessage
+            Resource:
+              Fn::Sub: arn:aws:sqs:us-east-1:${AWS::AccountId}:agente-iam-aplicador-fallos
+          - Sid: LogsDeSuLambda
+            Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource:
+              Fn::Sub: arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/aws/lambda/agente-iam-*
+          - Sid: NuncaReemplazarNiBorrarFilas
+            Effect: Deny
+            Action:
+            - dynamodb:PutItem
+            - dynamodb:DeleteItem
+            - dynamodb:BatchWriteItem
+            - dynamodb:DeleteTable
+            - dynamodb:UpdateTable
+            # PartiQL escribe filas por otro camino; TTL y backups continuos
+            # borran filas o quitan el rastro (PITR) sin pasar por UpdateItem.
+            - dynamodb:PartiQL*
+            - dynamodb:UpdateTimeToLive
+            - dynamodb:UpdateContinuousBackups
+            Resource: '*'
+  RolAprobacion:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: AgenteIAM-Aprobacion
+      Description: 'Agente IAM - Lambda de aprobacion: identifica a quien firma, corre los controles y es la unica que escribe
+        aprobacion y rechazo. No escribe en IAM ni habla con el modelo.'
+      PermissionsBoundary:
+        Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AgenteIAM-LimiteSistema
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+          Condition:
+            StringEquals:
+              aws:SourceAccount:
+                Fn::Sub: ${AWS::AccountId}
+            # La funcion exacta, no agente-iam-*: este es el unico rol que escribe
+            # la decision y no lo debe poder asumir otra Lambda de la cuenta.
+            ArnEquals:
+              aws:SourceArn:
+                Fn::Sub: arn:aws:lambda:us-east-1:${AWS::AccountId}:function:agente-iam-aprobacion
+      Policies:
+      - PolicyName: AgenteIAM-Aprobacion-permisos
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Sid: LeerLaSolicitud
+            Effect: Allow
+            Action:
+            - dynamodb:GetItem
+            Resource:
+              Fn::Sub: arn:aws:dynamodb:us-east-1:${AWS::AccountId}:table/agente-iam-solicitudes
+          - Sid: EscribirSoloLaDecision
+            Effect: Allow
+            Action:
+            - dynamodb:UpdateItem
+            Resource:
+              Fn::Sub: arn:aws:dynamodb:us-east-1:${AWS::AccountId}:table/agente-iam-solicitudes
+            Condition:
+              ForAllValues:StringEquals:
+                dynamodb:Attributes:
+                - id
+                - estado
+                - aprobacion
+                - rechazo
+              'Null':
+                dynamodb:Attributes: 'false'
+              StringEqualsIfExists:
+                dynamodb:ReturnValues:
+                - NONE
+                - UPDATED_OLD
+                - UPDATED_NEW
+          # La lista de hoy del permission set del aprobador: la Lambda hace en
+          # su nombre lo que hacia aprobar.py desde el equipo de la persona.
+          - Sid: RevalidarConLasReglasDeHoy
+            Effect: Allow
+            Action:
+            - iam:GetPolicy
+            - iam:GetPolicyVersion
+            - iam:GetRole
+            - iam:GetUser
+            - iam:ListAttachedRolePolicies
+            - iam:ListAttachedUserPolicies
+            - iam:ListRolePolicies
+            - iam:ListUserPolicies
+            Resource:
+            - Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/*
+            - Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/*
+            - Fn::Sub: arn:aws:iam::${AWS::AccountId}:user/*
+          - Sid: AccessAnalyzerNoTieneRecurso
+            Effect: Allow
+            Action:
+            - access-analyzer:ValidatePolicy
+            - access-analyzer:CheckNoNewAccess
+            Resource: '*'
+          # Su grupo lo crea la pila (RegistroAprobacion): CreateLogGroup sobra.
+          - Sid: LogsDeSuLambda
+            Effect: Allow
+            Action:
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource:
+              Fn::Sub: arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/aws/lambda/agente-iam-aprobacion:*
+          - Sid: NuncaReemplazarNiBorrarFilas
+            Effect: Deny
+            Action:
+            - dynamodb:PutItem
+            - dynamodb:DeleteItem
+            - dynamodb:BatchWriteItem
+            - dynamodb:DeleteTable
+            - dynamodb:UpdateTable
+            - dynamodb:PartiQL*
+            - dynamodb:UpdateTimeToLive
+            - dynamodb:UpdateContinuousBackups
+            Resource: '*'
+          - Sid: NuncaEscribirEnIAM
+            Effect: Deny
+            Action:
+            - iam:Create*
+            - iam:Put*
+            - iam:Attach*
+            - iam:Detach*
+            - iam:Delete*
+            - iam:Update*
+            - iam:Add*
+            - iam:Remove*
+            - iam:Set*
+            - iam:Tag*
+            - iam:Untag*
+            - iam:Upload*
+            - iam:Change*
+            - iam:Enable*
+            - iam:Deactivate*
+            - iam:Reset*
+            - iam:Resync*
+            - iam:PassRole
+            - organizations:*
+            - sts:AssumeRole
+            - sts:AssumeRoleWithSAML
+            - sts:AssumeRoleWithWebIdentity
+            - sts:GetFederationToken
+            Resource: '*'
+          - Sid: NuncaHablarConElModelo
+            Effect: Deny
+            Action: bedrock:*
+            Resource: '*'
+  RolAvisos:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: AgenteIAM-Avisos
+      Description: 'Agente IAM - Lambda de avisos: lee el stream de la tabla y manda un correo desde una sola identidad. No lee
+        ni escribe la tabla, no toca IAM ni habla con el modelo.'
+      PermissionsBoundary:
+        Fn::Sub: arn:aws:iam::${AWS::AccountId}:policy/AgenteIAM-LimiteSistema
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+          Condition:
+            StringEquals:
+              aws:SourceAccount:
+                Fn::Sub: ${AWS::AccountId}
+            # Sin aws:SourceArn a proposito, como el aplicador: el disparador del
+            # stream (event source mapping) valida la confianza sin aportarlo.
+      Policies:
+      - PolicyName: AgenteIAM-Avisos-permisos
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          # Un solo remitente, por la condicion ses:FromAddress. El recurso es
+          # identity/* y no la del remitente: MEDIDO el 26-10-2026 (MEDICIONES
+          # O.5, H 40) que SES autoriza SendEmail tambien contra la identidad del
+          # DESTINATARIO (identity/<correo de aviso>), asi que con solo la del
+          # remitente todo envio da AccessDenied. Lo que acota quien envia es la
+          # condicion; el destinatario lo pone la solicitud (correo_aviso).
+          - Sid: EnviarSoloDesdeElRemitente
+            Effect: Allow
+            Action: ses:SendEmail
+            Resource:
+              Fn::Sub: arn:aws:ses:us-east-1:${AWS::AccountId}:identity/*
+            Condition:
+              StringEquals:
+                ses:FromAddress:
+                  Ref: CorreoRemitente
+          # El stream trae el registro nuevo y el anterior (NEW_AND_OLD_IMAGES):
+          # el correo sale de ahi, sin leer la tabla.
+          - Sid: LeerElStream
+            Effect: Allow
+            Action:
+            - dynamodb:DescribeStream
+            - dynamodb:GetRecords
+            - dynamodb:GetShardIterator
+            Resource:
+              Fn::Sub: arn:aws:dynamodb:us-east-1:${AWS::AccountId}:table/agente-iam-solicitudes/stream/*
+          - Sid: ListarStreamsNoTieneRecurso
+            Effect: Allow
+            Action:
+            - dynamodb:ListStreams
+            Resource: '*'
+          # Su grupo lo crea la pila runtime (RegistroAvisos): CreateLogGroup sobra.
+          - Sid: Logs
+            Effect: Allow
+            Action:
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource:
+              Fn::Sub: arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/aws/lambda/agente-iam-avisos:*
+          # Ni la fila ni nada de la tabla: lo que necesita lo trae el evento.
+          - Sid: NuncaLeerNiEscribirLaTabla
+            Effect: Deny
+            Action:
+            - dynamodb:GetItem
+            - dynamodb:Query
+            - dynamodb:Scan
+            - dynamodb:UpdateItem
+            Resource: '*'
+          - Sid: NuncaReemplazarNiBorrarFilas
+            Effect: Deny
+            Action:
+            - dynamodb:PutItem
+            - dynamodb:DeleteItem
+            - dynamodb:BatchWriteItem
+            - dynamodb:DeleteTable
+            - dynamodb:UpdateTable
+            # PartiQL escribe filas por otro camino; TTL y backups continuos
+            # borran filas o quitan el rastro (PITR) sin pasar por UpdateItem.
+            - dynamodb:PartiQL*
+            - dynamodb:UpdateTimeToLive
+            - dynamodb:UpdateContinuousBackups
+            Resource: '*'
+          - Sid: NuncaEscribirEnIAM
+            Effect: Deny
+            Action:
+            - iam:Create*
+            - iam:Put*
+            - iam:Attach*
+            - iam:Detach*
+            - iam:Delete*
+            - iam:Update*
+            - iam:Add*
+            - iam:Remove*
+            - iam:Set*
+            - iam:Tag*
+            - iam:Untag*
+            - iam:Upload*
+            - iam:Change*
+            - iam:Enable*
+            - iam:Deactivate*
+            - iam:Reset*
+            - iam:Resync*
+            - iam:PassRole
+            - organizations:*
+            - sts:AssumeRole
+            - sts:AssumeRoleWithSAML
+            - sts:AssumeRoleWithWebIdentity
+            - sts:GetFederationToken
+            Resource: '*'
+          - Sid: NuncaHablarConElModelo
+            Effect: Deny
+            Action: bedrock:*
+            Resource: '*'
+      Tags:
+      - Key: proyecto
+        Value: agente-iam
+  # El grupo de logs es de la pila para que la retencion y el Retain sean suyos:
+  # si no existiera, Lambda crearia uno sin retencion y fuera de la pila. La
+  # funcion lo usa por LoggingConfig (eso tambien la ordena despues de el).
+  RegistroAprobacion:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: /aws/lambda/agente-iam-aprobacion
+      RetentionInDays: 365
+  FuncionAprobacion:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: agente-iam-aprobacion
+      Description: 'Agente IAM - aprobacion: recibe la peticion firmada de la persona, corre los controles y escribe la decision.'
+      Runtime: python3.12
+      Architectures:
+      - arm64
+      Handler: agente_iam.aprobar.manejador
+      Role:
+        Fn::GetAtt:
+        - RolAprobacion
+        - Arn
+      Code:
+        S3Bucket:
+          Fn::Sub: agente-iam-despliegue-${AWS::AccountId}
+        S3Key:
+          Ref: ClaveCodigoAprobacion
+      Timeout: 60
+      MemorySize: 512
+      # Sin AWS_REGION: la pone Lambda y es una variable reservada. Sin VpcConfig:
+      # revalida contra el catalogo de AWS y necesita internet (ADR-003).
+      Environment:
+        Variables:
+          ALMACEN: dynamodb
+          TABLA_SOLICITUDES: agente-iam-solicitudes
+          DIR_CACHE_CATALOGO: /var/task/catalogo
+      LoggingConfig:
+        LogGroup:
+          Ref: RegistroAprobacion
+  # AuthType AWS_IAM: Lambda comprueba la firma SigV4 antes de invocar y rellena
+  # la identidad que lee la funcion. Ningun AWS::Lambda::Permission: la persona
+  # (permission set) y la funcion estan en la misma cuenta y basta la politica
+  # de identidad del permission set (guia de Lambda, 24-10-2026). Un Permission
+  # con Principal '*' abriria la URL. Sin Cors: la llama la CLI, no un navegador.
+  UrlAprobacion:
+    Type: AWS::Lambda::Url
+    Properties:
+      AuthType: AWS_IAM
+      TargetFunctionArn:
+        Fn::GetAtt:
+        - FuncionAprobacion
+        - Arn
+Outputs:
+  TablaArn:
+    Value:
+      Fn::GetAtt:
+      - TablaSolicitudes
+      - Arn
+  StreamArn:
+    Value:
+      Fn::GetAtt:
+      - TablaSolicitudes
+      - StreamArn
+  BucketPaquete:
+    Value:
+      Ref: BucketPaquete
+  RolRuntimeArn:
+    Value:
+      Fn::GetAtt:
+      - RolRuntime
+      - Arn
+  RolAplicadorArn:
+    Value:
+      Fn::GetAtt:
+      - RolAplicador
+      - Arn
+  RolAvisosArn:
+    Value:
+      Fn::GetAtt:
+      - RolAvisos
+      - Arn
+  RolAprobacionArn:
+    Value:
+      Fn::GetAtt:
+      - RolAprobacion
+      - Arn
+  FuncionAprobacionArn:
+    Value:
+      Fn::GetAtt:
+      - FuncionAprobacion
+      - Arn
+  UrlAprobacion:
+    Value:
+      Fn::GetAtt:
+      - UrlAprobacion
+      - FunctionUrl

@@ -1,0 +1,11 @@
+{
+  "solicitud_id": "req-011-lambda-prohibida",
+  "principal_arn_declarado": "arn:aws:iam::111122223333:role/app-finanzas-demo",
+  "campos": {
+    "servicio": "lambda",
+    "recurso": "procesador-facturas",
+    "tipo_acceso": "administracion",
+    "region": "us-east-1"
+  },
+  "justificacion": "Soy la responsable de guardia de la funcion procesador-facturas. Cuando falla de madrugada tengo que poder desplegar el codigo corregido yo misma, sin esperar al equipo de plataforma. Necesito permiso para actualizar el codigo de esa funcion y para publicar una version nueva."
+}

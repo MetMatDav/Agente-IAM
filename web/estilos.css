@@ -1,0 +1,166 @@
+:root {
+  --fondo: #ffffff;
+  --texto: #1b1f24;
+  --suave: #57606a;
+  --borde: #c5ccd3;
+  --panel: #f5f7f9;
+  --primario: #0b5cad;
+  --primario-texto: #ffffff;
+  --error: #8a1c1c;
+  --aviso: #6a4a00;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fondo: #14181d;
+    --texto: #e6e9ec;
+    --suave: #a3acb5;
+    --borde: #3a424b;
+    --panel: #1d232a;
+    --primario: #5aa2e8;
+    --primario-texto: #0b1117;
+    --error: #ff9a9a;
+    --aviso: #f0c970;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--texto);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
+}
+
+main {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin: 0 0 0.5rem;
+}
+
+h2 {
+  font-size: 1.15rem;
+  margin: 0 0 0.75rem;
+}
+
+section,
+form {
+  margin-top: 1.5rem;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.campo {
+  margin-bottom: 1rem;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+small {
+  display: block;
+  color: var(--suave);
+  margin-top: 0.25rem;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  color: var(--texto);
+  background: var(--fondo);
+  border: 1px solid var(--borde);
+  border-radius: 0.375rem;
+}
+
+textarea {
+  resize: vertical;
+}
+
+button {
+  font: inherit;
+  padding: 0.55rem 1.1rem;
+  border-radius: 0.375rem;
+  border: 1px solid var(--borde);
+  background: var(--panel);
+  color: var(--texto);
+  cursor: pointer;
+}
+
+button.primario {
+  background: var(--primario);
+  border-color: var(--primario);
+  color: var(--primario-texto);
+  font-weight: 600;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+:focus-visible {
+  outline: 3px solid var(--primario);
+  outline-offset: 2px;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0 0 0.75rem;
+}
+
+dt {
+  font-weight: 600;
+}
+
+dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  margin: 1rem 0 0;
+  padding: 0.75rem;
+  background: var(--panel);
+  border: 1px solid var(--borde);
+  border-radius: 0.375rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+pre:empty {
+  display: none;
+}
+
+.aviso {
+  color: var(--aviso);
+  font-weight: 600;
+}
+
+#error {
+  color: var(--error);
+  font-weight: 600;
+  margin-top: 1.5rem;
+}
+
+#error:empty {
+  display: none;
+}

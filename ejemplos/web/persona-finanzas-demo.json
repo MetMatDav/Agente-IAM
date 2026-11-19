@@ -1,0 +1,10 @@
+{
+  "campos": {
+    "servicio": "s3",
+    "recurso": "finanzas-demo-111122223333",
+    "region": "us-east-1"
+  },
+  "horas": 4,
+  "correo_aviso": "persona@example.com",
+  "justificacion": "Necesito listar y descargar los informes del bucket finanzas-demo para el cierre mensual. No necesito subir ni borrar nada."
+}

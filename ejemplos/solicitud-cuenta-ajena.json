@@ -1,0 +1,11 @@
+{
+  "solicitud_id": "req-007-cuenta-ajena",
+  "principal_arn_declarado": "arn:aws:iam::999999999999:user/ana.gomez",
+  "campos": {
+    "servicio": "s3",
+    "recurso": "finanzas-2026",
+    "tipo_acceso": "lectura",
+    "region": "us-east-1"
+  },
+  "justificacion": "Necesito leer el bucket del cierre mensual desde mi cuenta."
+}

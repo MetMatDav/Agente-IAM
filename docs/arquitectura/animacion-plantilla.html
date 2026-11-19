@@ -1,0 +1,795 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recorrido Agente IAM</title>
+<!--
+  Plantilla de la animacion. NO se abre directamente: scripts/construir_arquitectura.py
+  mete aqui el SVG de la pagina 2 en espanol y en ingles y escribe agente-iam-animacion.html.
+  Los pasos viven en el bloque JSON "pasos" (texto en espanol arriba y en ingles en "en");
+  tests/unitarios/test_arquitectura_visual.py comprueba que cada flecha del diagrama pertenece
+  a un paso, que cada id existe y que cada paso tiene su texto en ingles.
+  Idioma: ?lang=es o ?lang=en en la URL; si no, el ultimo elegido; si no, el del navegador.
+-->
+<style>
+:root {
+  --fondo: #f4f6f8;
+  --superficie: #ffffff;
+  --texto: #16191f;
+  --texto-suave: #545b64;
+  --borde: #d5dbdb;
+  --acento: #007cbd;
+  --acento-suave: #e6f2f8;
+  --fallo: #d13212;
+  --fallo-suave: #fbe9e5;
+  --naranja: #ff9900;
+  --radio: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --fondo: #0f1419;
+    --superficie: #1b232c;
+    --texto: #e9edf1;
+    --texto-suave: #a7b1bc;
+    --borde: #34404c;
+    --acento: #4fb3ea;
+    --acento-suave: #16303f;
+    --fallo: #ff6b4f;
+    --fallo-suave: #3a1d17;
+  }
+}
+:root[data-theme="dark"] {
+  --fondo: #0f1419; --superficie: #1b232c; --texto: #e9edf1; --texto-suave: #a7b1bc;
+  --borde: #34404c; --acento: #4fb3ea; --acento-suave: #16303f; --fallo: #ff6b4f; --fallo-suave: #3a1d17;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--fondo);
+  color: var(--texto);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+header {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 18px 16px 10px; border-bottom: 3px solid var(--naranja); background: var(--superficie);
+}
+header h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
+header p { margin: 4px 0 0; color: var(--texto-suave); font-size: 14px; }
+.idioma { display: inline-flex; flex-shrink: 0; border: 1px solid var(--borde); border-radius: 8px; overflow: hidden; }
+.idioma button {
+  font: inherit; font-size: 13px; font-weight: 700; letter-spacing: .04em;
+  padding: 6px 11px; min-height: 34px; border: 0; background: var(--superficie); color: var(--texto-suave); cursor: pointer;
+}
+.idioma button + button { border-left: 1px solid var(--borde); }
+.idioma button[aria-pressed="true"] { background: var(--acento); color: #fff; }
+.idioma button:focus-visible { outline: 3px solid var(--naranja); outline-offset: -3px; }
+main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px 16px 24px;
+  max-width: 1800px;
+  margin: 0 auto;
+}
+@media (min-width: 1000px) {
+  main { grid-template-columns: minmax(0, 1fr) clamp(320px, 30vw, 400px); align-items: start; }
+  aside { position: sticky; top: 12px; }
+}
+.lienzo {
+  background: #ffffff;           /* el diagrama se lee siempre en claro */
+  color-scheme: light;
+  border: 1px solid var(--borde);
+  border-radius: var(--radio);
+  overflow: auto;
+  position: relative;
+  -webkit-overflow-scrolling: touch;
+}
+.diagrama[hidden] { display: none; }
+.lienzo svg { display: block; width: 100%; height: auto; min-width: 820px; }
+.chip-lleva {
+  position: absolute;
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 14px));
+  background: var(--acento);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0,0,0,.25);
+  opacity: 0;
+  transition: opacity .2s;
+}
+.chip-lleva.visible { opacity: 1; }
+.chip-lleva.fallo { background: var(--fallo); }
+
+aside {
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  border-radius: var(--radio);
+  padding: 14px;
+}
+.controles { display: flex; flex-wrap: wrap; gap: 8px; }
+.controles button {
+  font: inherit; font-size: 14px; font-weight: 600;
+  padding: 7px 12px; min-height: 38px;
+  border-radius: 8px; border: 1px solid var(--borde);
+  background: var(--superficie); color: var(--texto); cursor: pointer;
+}
+.controles button.principal { background: var(--acento); border-color: var(--acento); color: #fff; min-width: 116px; }
+.controles button:focus-visible, .pasos button:focus-visible { outline: 3px solid var(--naranja); outline-offset: 2px; }
+.controles button:disabled { opacity: .45; cursor: default; }
+.pasos { list-style: none; padding: 0; margin: 12px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.pasos button {
+  font: inherit; font-weight: 700; font-size: 14px;
+  width: 36px; height: 36px; border-radius: 8px;
+  border: 2px solid var(--borde); background: var(--superficie); color: var(--texto-suave); cursor: pointer;
+}
+.pasos button[aria-current="step"] { background: var(--acento); border-color: var(--acento); color: #fff; }
+.pasos button.fallo { color: var(--fallo); }
+.pasos button.fallo[aria-current="step"] { background: var(--fallo); border-color: var(--fallo); color: #fff; }
+.progreso { height: 4px; background: var(--acento-suave); border-radius: 4px; margin-top: 12px; overflow: hidden; }
+.progreso div { height: 100%; width: 0; background: var(--acento); transition: width .3s; }
+.tarjeta h2 { font-size: 19px; margin: 14px 0 6px; line-height: 1.3; }
+.tarjeta h2 .num {
+  display: inline-grid; place-items: center; width: 28px; height: 28px; margin-right: 8px;
+  border-radius: 7px; background: var(--acento); color: #fff; font-size: 15px; vertical-align: 2px;
+}
+.tarjeta.es-fallo h2 .num { background: var(--fallo); }
+.tarjeta h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--texto-suave); margin: 14px 0 4px; }
+.tarjeta p { margin: 0; }
+.tarjeta code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px;
+  background: var(--acento-suave); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere;
+}
+.fila { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; font-size: 13px; }
+.fila span.estado { padding: 2px 9px; border-radius: 999px; border: 1px solid var(--borde); color: var(--texto-suave); }
+.fila span.estado.actual { background: var(--acento); border-color: var(--acento); color: #fff; font-weight: 700; }
+.fila span.estado.actual.fallo { background: var(--fallo); border-color: var(--fallo); }
+.fila .sep { color: var(--texto-suave); }
+.ayuda { margin-top: 14px; font-size: 12.5px; color: var(--texto-suave); }
+
+/* Estados del diagrama */
+.diagrama g.atenuada { opacity: .16; transition: opacity .35s; }
+.diagrama g.celda { transition: opacity .35s; }
+.diagrama g.foco { filter: drop-shadow(0 0 7px rgba(0,124,189,.75)); }
+.diagrama g.activa > g > path, .diagrama g.activa > path { stroke: #007cbd !important; stroke-width: 3.5 !important; }
+.diagrama g.activa > g > path[fill]:not([fill="none"]), .diagrama g.activa > path[fill]:not([fill="none"]) { fill: #007cbd !important; }
+.diagrama g.activa-fallo > g > path, .diagrama g.activa-fallo > path { stroke: #d13212 !important; stroke-width: 3.5 !important; }
+.diagrama g.activa-fallo > g > path[fill]:not([fill="none"]), .diagrama g.activa-fallo > path[fill]:not([fill="none"]) { fill: #d13212 !important; }
+.paquete circle { fill: #007cbd; stroke: #fff; }
+.paquete.fallo circle { fill: #d13212; }
+
+@media (prefers-reduced-motion: reduce) {
+  .diagrama g.atenuada, .diagrama g.celda, .progreso div, .chip-lleva { transition: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 data-i18n="titulo">Agente IAM: el recorrido de una solicitud</h1>
+    <p data-i18n="subtitulo">Animacion del diagrama de despliegue. Cada paso dice que pasa, por que se hizo asi y donde mirarlo en el repositorio. Estado medido el 26-10-2026.</p>
+  </div>
+  <div class="idioma" role="group" aria-label="Idioma / Language">
+    <button type="button" data-idioma="es" lang="es" aria-label="Espanol">ES</button>
+    <button type="button" data-idioma="en" lang="en" aria-label="English">EN</button>
+  </div>
+</header>
+<main>
+  <section class="lienzo" data-i18n-aria="lienzo" aria-label="Diagrama de despliegue en AWS">
+    <div class="diagrama" data-idioma="es"><!--SVG_DESPLIEGUE--></div>
+    <div class="diagrama" data-idioma="en"><!--SVG_DESPLIEGUE_EN--></div>
+    <div class="chip-lleva" aria-hidden="true"></div>
+  </section>
+  <aside>
+    <div class="controles">
+      <button type="button" id="anterior"></button>
+      <button type="button" id="reproducir" class="principal"></button>
+      <button type="button" id="siguiente"></button>
+      <button type="button" id="reiniciar"></button>
+    </div>
+    <ol class="pasos"></ol>
+    <div class="progreso" aria-hidden="true"><div></div></div>
+    <article class="tarjeta" aria-live="polite">
+      <h2></h2>
+      <h3 data-i18n="que">Que pasa</h3><p class="que"></p>
+      <h3 data-i18n="porque">Por que asi</h3><p class="porque"></p>
+      <h3 data-i18n="donde">Donde mirarlo</h3><p class="donde"></p>
+      <h3 data-i18n="fila">Estado de la fila en DynamoDB</h3><div class="fila"></div>
+    </article>
+    <p class="ayuda" data-i18n="ayuda"></p>
+  </aside>
+</main>
+
+<script type="application/json" id="pasos">
+[
+  {
+    "id": "0",
+    "titulo": "Vista general",
+    "que": "Una persona pide un acceso temporal a AWS desde una pagina web. Un agente de IA propone la politica minima, un humano distinto la aprueba y una Lambda crea un rol que caduca solo. Pulsa Reproducir o ve paso a paso.",
+    "porque": "El sistema descansa en cuatro cosas: el agente no escribe en IAM; el techo limita lo que se puede conceder; solo el servidor escribe la aprobacion; y la persona viene de Identity Center por un token que AgentCore valida.",
+    "donde": "<code>CONTEXTO.md</code> seccion 3 y <code>ESTUDIO-diseno-y-seguridad.md</code> seccion 19.",
+    "en": {
+      "titulo": "Overview",
+      "que": "A person asks for temporary access to AWS from a web page. An AI agent proposes the least-privilege policy, a different human approves it, and a Lambda creates a role that expires on its own. Press Play or go step by step.",
+      "porque": "The system rests on four things: the agent never writes to IAM; the Techo boundary limits what can be granted; only the server writes the approval; and the person comes from Identity Center through a token that AgentCore validates.",
+      "donde": "<code>CONTEXTO.md</code> section 3 and <code>ESTUDIO-diseno-y-seguridad.md</code> section 19 (both in Spanish)."
+    },
+    "fila": null,
+    "nodos": [],
+    "insignias": [],
+    "tramos": []
+  },
+  {
+    "id": "1",
+    "titulo": "Abre la pagina",
+    "que": "El navegador pide la pagina a CloudFront por HTTPS. CloudFront la lee del bucket privado con Origin Access Control y anade cabeceras de seguridad.",
+    "porque": "El bucket no es publico: solo la distribucion puede leerlo. La pagina es estatica y sin dependencias, asi que no hay servidor web que mantener. Pendiente: CloudFront aplica TLSv1 con su certificado por defecto; TLS 1.2 exige dominio propio.",
+    "donde": "<code>infra/cfn/web.yaml</code>, <code>web/</code> y <code>docs/MEDICIONES.md</code> O.4.",
+    "en": {
+      "titulo": "Opens the page",
+      "que": "The browser requests the page from CloudFront over HTTPS. CloudFront reads it from the private bucket with Origin Access Control and adds security headers.",
+      "porque": "The bucket is not public: only the distribution can read it. The page is static with no dependencies, so there is no web server to maintain. Pending: CloudFront enforces TLSv1 with its default certificate; TLS 1.2 needs a custom domain.",
+      "donde": "<code>infra/cfn/web.yaml</code>, <code>web/</code> and <code>docs/MEDICIONES.md</code> O.4."
+    },
+    "fila": null,
+    "nodos": ["persona", "cloudfront", "s3-web"],
+    "insignias": ["b1"],
+    "tramos": [
+      {"arista": "e1", "lleva": "GET /", "lleva_en": "GET /"},
+      {"arista": "e1b", "lleva": "lectura via OAC", "lleva_en": "read via OAC"},
+      {"arista": "e1b", "inverso": true, "lleva": "index.html", "lleva_en": "index.html"},
+      {"arista": "e1", "inverso": true, "lleva": "pagina + cabeceras", "lleva_en": "page + headers"}
+    ]
+  },
+  {
+    "id": "2",
+    "titulo": "Inicia sesion",
+    "que": "La pagina manda a la persona al dominio de Cognito con PKCE. Cognito la federa por SAML con Identity Center, donde entra con MFA, y vuelve con un access_token y un id_token.",
+    "porque": "La identidad la pone Identity Center, no el formulario. Solo el grupo solicitantes tiene asignada la aplicacion: aprobador.demo no obtiene token (medido O.2). Los tokens viven en memoria; recargar la pagina pierde la sesion.",
+    "donde": "<code>infra/cfn/acceso.yaml</code>, <code>infra/cfn/identidades.yaml</code> y <code>docs/ADR-001-agentcore-identidad.md</code>.",
+    "en": {
+      "titulo": "Signs in",
+      "que": "The page sends the person to the Cognito domain with PKCE. Cognito federates over SAML with Identity Center, where they sign in with MFA, and returns an access_token and an id_token.",
+      "porque": "Identity Center sets the identity, not the form. Only the requesters group is assigned the application: aprobador.demo gets no token (measured O.2). Tokens live in memory; reloading the page loses the session.",
+      "donde": "<code>infra/cfn/acceso.yaml</code>, <code>infra/cfn/identidades.yaml</code> and <code>docs/ADR-001-agentcore-identidad.md</code>."
+    },
+    "fila": null,
+    "nodos": ["persona", "cognito", "idc"],
+    "insignias": ["b2"],
+    "tramos": [
+      {"arista": "e2", "lleva": "authorize + PKCE", "lleva_en": "authorize + PKCE"},
+      {"arista": "e2b", "lleva": "peticion SAML", "lleva_en": "SAML request"},
+      {"arista": "e2b", "inverso": true, "lleva": "asercion SAML (MFA)", "lleva_en": "SAML assertion (MFA)"},
+      {"arista": "e2", "inverso": true, "lleva": "access_token + id_token", "lleva_en": "access_token + id_token"}
+    ]
+  },
+  {
+    "id": "3",
+    "titulo": "Pide el acceso",
+    "que": "El formulario va al runtime de AgentCore con el access_token. El autorizador JWT comprueba el emisor y el cliente; el servidor saca la persona y su sub de los claims y forma el id de la solicitud.",
+    "porque": "La pagina no elige beneficiario: lo fija el token. Si el token no trae persona, la respuesta es sin_persona y no se llama al modelo ni se escribe nada. Un ARN o un id en el formulario dan forma_invalida.",
+    "donde": "<code>agente_iam/servidor.py</code>, <code>agente_iam/models.py</code> (<code>SolicitudWeb</code>) e <code>infra/cfn/runtime.yaml</code>.",
+    "en": {
+      "titulo": "Requests access",
+      "que": "The form goes to the AgentCore runtime with the access_token. The JWT authorizer checks the issuer and the client; the server takes the person and their sub from the claims and builds the request id.",
+      "porque": "The page does not choose who gets the access: the token does. If the token carries no person, the answer is sin_persona and neither the model is called nor anything written. An ARN or an id in the form returns forma_invalida.",
+      "donde": "<code>agente_iam/servidor.py</code>, <code>agente_iam/models.py</code> (<code>SolicitudWeb</code>) and <code>infra/cfn/runtime.yaml</code>."
+    },
+    "fila": null,
+    "nodos": ["persona", "runtime"],
+    "insignias": ["b3"],
+    "tramos": [
+      {"arista": "e3", "lleva": "POST + access_token", "lleva_en": "POST + access_token"}
+    ]
+  },
+  {
+    "id": "4",
+    "titulo": "El agente propone",
+    "que": "Primero chequeos deterministas que no gastan un token. Despues el agente pide la politica a Claude en Bedrock y el codigo la valida en tres capas: lista negra con el catalogo oficial, Access Analyzer y el simulador de IAM. Si falla, reintenta hasta 3 veces.",
+    "porque": "El rol del runtime no tiene escritura en IAM: una inyeccion de prompt no puede conceder nada. Cada capa atrapo algo que las otras no (medido B.1).",
+    "donde": "<code>agente_iam/orquestador.py</code>, <code>agente.py</code>, <code>coherencia.py</code> y <code>simulacion.py</code>.",
+    "en": {
+      "titulo": "The agent proposes",
+      "que": "First, deterministic checks that spend no tokens. Then the agent asks Claude in Bedrock for the policy and the code validates it in three layers: a deny list with the official catalog, Access Analyzer and the IAM simulator. If it fails, it retries up to 3 times.",
+      "porque": "The runtime role cannot write to IAM: a prompt injection cannot grant anything. Each layer caught something the others missed (measured B.1).",
+      "donde": "<code>agente_iam/orquestador.py</code>, <code>agente.py</code>, <code>coherencia.py</code> and <code>simulacion.py</code>."
+    },
+    "fila": null,
+    "nodos": ["runtime", "bedrock", "iam-lee"],
+    "insignias": ["b4"],
+    "tramos": [
+      {"arista": "e4a", "lleva": "InvokeModel", "lleva_en": "InvokeModel"},
+      {"arista": "e4a", "inverso": true, "lleva": "propuesta tipada", "lleva_en": "typed proposal"},
+      {"arista": "e4b", "lleva": "ValidatePolicy + simulador", "lleva_en": "ValidatePolicy + simulator"},
+      {"arista": "e4b", "inverso": true, "lleva": "veredicto", "lleva_en": "verdict"}
+    ]
+  },
+  {
+    "id": "5",
+    "titulo": "Queda registrada",
+    "que": "El runtime escribe la fila de la solicitud en la tabla agente-iam-solicitudes con estado propuesta.",
+    "porque": "Una fila por solicitud y un atributo por actor, escritos solo con UpdateItem: asi IAM distingue aprobar de reescribir la propuesta. PITR y Streams dejan rastro, y el stream es lo que dispara los pasos 7 y 8.",
+    "donde": "<code>agente_iam/almacen.py</code> e <code>infra/cfn/base.yaml</code>.",
+    "en": {
+      "titulo": "It is recorded",
+      "que": "The runtime writes the request row to the agente-iam-solicitudes table with state propuesta (proposed).",
+      "porque": "One row per request and one attribute per actor, written only with UpdateItem: this way IAM can tell approving apart from rewriting the proposal. PITR and Streams leave a trail, and the stream is what triggers steps 7 and 8.",
+      "donde": "<code>agente_iam/almacen.py</code> and <code>infra/cfn/base.yaml</code>."
+    },
+    "fila": "propuesta",
+    "nodos": ["runtime", "tabla"],
+    "insignias": ["b5"],
+    "tramos": [
+      {"arista": "e5", "lleva": "estado = propuesta", "lleva_en": "state = propuesta"}
+    ]
+  },
+  {
+    "id": "6",
+    "titulo": "Un humano aprueba",
+    "que": "El aprobador entra por Identity Center con el permission set Aprobador y firma con SigV4 una peticion a la URL de la Lambda de aprobacion, con la huella que vio. La Lambda lee quien firma del evento, separa personas, revalida, corre CheckNoNewAccess contra el techo y escribe aprobada.",
+    "porque": "El aprobador no puede fabricar una aprobacion: solo el rol de la Lambda escribe ese bloque, y el permission set tiene un Deny explicito. Quien firma sale del evento que pone el servicio, nunca del cuerpo.",
+    "donde": "<code>agente_iam/aprobar.py</code>, <code>aprobar_cliente.py</code> y <code>docs/ADR-003-aprobacion-en-servidor-y-persona.md</code>.",
+    "en": {
+      "titulo": "A human approves",
+      "que": "The approver signs in through Identity Center with the Aprobador permission set and signs, with SigV4, a request to the approval Lambda URL carrying the fingerprint they saw. The Lambda reads who signed from the event, keeps people separate, revalidates, runs CheckNoNewAccess against the Techo boundary and writes aprobada (approved).",
+      "porque": "The approver cannot forge an approval: only the Lambda's role writes that block, and the permission set has an explicit Deny. Who signed comes from the event the service fills in, never from the body.",
+      "donde": "<code>agente_iam/aprobar.py</code>, <code>aprobar_cliente.py</code> and <code>docs/ADR-003-aprobacion-en-servidor-y-persona.md</code>."
+    },
+    "fila": "aprobada",
+    "nodos": ["aprobador", "idc", "aprobacion", "tabla"],
+    "insignias": ["b6"],
+    "tramos": [
+      {"arista": "e6a", "lleva": "login + MFA", "lleva_en": "login + MFA"},
+      {"arista": "e6a", "inverso": true, "lleva": "credenciales Aprobador", "lleva_en": "Aprobador credentials"},
+      {"arista": "e6b", "lleva": "POST firmado + huella", "lleva_en": "signed POST + fingerprint"},
+      {"arista": "e6c", "lleva": "estado = aprobada", "lleva_en": "state = aprobada"}
+    ]
+  },
+  {
+    "id": "7",
+    "titulo": "Se aplica",
+    "que": "El stream, filtrado por estado aprobada, dispara al aplicador. Relee la fila, repite los controles y crea el rol de la persona bajo /agente-iam/personas/ con el techo como boundary, confianza solo para su sub y caducidad en cada Allow. Escribe aplicada.",
+    "porque": "Es el unico rol con escritura en IAM y ninguna persona lo asume. La caducidad va en la confianza y en la politica, asi que el rol deja de servir solo. Medido: aplicada 5 s despues de aprobar (O.2).",
+    "donde": "<code>agente_iam/aplicador.py</code>, <code>personas.py</code> y <code>docs/ADR-004-rol-por-persona-y-confianza-por-token.md</code>.",
+    "en": {
+      "titulo": "It is applied",
+      "que": "The stream, filtered on state aprobada, triggers the applier. It rereads the row, repeats the checks and creates the person's role under /agente-iam/personas/ with Techo as its boundary, trust only for their sub, and an expiry on every Allow. It writes aplicada (applied).",
+      "porque": "It is the only role that can write to IAM, and no person assumes it. The expiry lives in both the trust policy and the permissions policy, so the role stops working on its own. Measured: aplicada 5 s after approval (O.2).",
+      "donde": "<code>agente_iam/aplicador.py</code>, <code>personas.py</code> and <code>docs/ADR-004-rol-por-persona-y-confianza-por-token.md</code>."
+    },
+    "fila": "aplicada",
+    "nodos": ["tabla", "aplicador", "rol-persona"],
+    "insignias": ["b7"],
+    "tramos": [
+      {"arista": "e7a", "lleva": "evento del stream", "lleva_en": "stream event"},
+      {"arista": "e7b", "lleva": "CreateRole + politica", "lleva_en": "CreateRole + policy"},
+      {"arista": "e7c", "lleva": "estado = aplicada", "lleva_en": "state = aplicada"}
+    ]
+  },
+  {
+    "id": "8",
+    "titulo": "Se avisa",
+    "que": "Cada cambio a un estado final dispara la Lambda de avisos, que manda por SES un correo con el id, el estado y, si esta aplicada, el rol y el vencimiento.",
+    "porque": "El correo nunca lleva la politica, la justificacion ni el aprobador. Los avisos no se reintentan: el remitente se verifica antes del primer evento. SES sigue en sandbox.",
+    "donde": "<code>agente_iam/avisos.py</code> y <code>docs/MEDICIONES.md</code> O.5.",
+    "en": {
+      "titulo": "The person is notified",
+      "que": "Every change to a final state triggers the notices Lambda, which sends an email through SES with the id, the state and, when applied, the role and its expiry.",
+      "porque": "The email never carries the policy, the justification or the approver. Notices are not retried, so the sender is verified before the first event. SES is still in its sandbox.",
+      "donde": "<code>agente_iam/avisos.py</code> and <code>docs/MEDICIONES.md</code> O.5."
+    },
+    "fila": "aplicada",
+    "nodos": ["tabla", "avisos", "ses", "buzon"],
+    "insignias": ["b8"],
+    "tramos": [
+      {"arista": "e8a", "lleva": "evento: estado final", "lleva_en": "event: final state"},
+      {"arista": "e8b", "lleva": "SendEmail", "lleva_en": "SendEmail"},
+      {"arista": "e8c", "lleva": "correo", "lleva_en": "email"}
+    ]
+  },
+  {
+    "id": "9",
+    "titulo": "Usa el acceso",
+    "que": "La pagina llama a STS con el id_token (AssumeRoleWithWebIdentity) y recibe credenciales temporales del rol de la persona.",
+    "porque": "No hay claves permanentes. La confianza del rol solo acepta el sub de esa persona y antes del vencimiento: el token de otra persona o mas horas que las pedidas se rechazan (medido O.3).",
+    "donde": "<code>web/app.js</code> y <code>scripts/solicitar.py</code> (subcomando <code>asumir</code>).",
+    "en": {
+      "titulo": "Uses the access",
+      "que": "The page calls STS with the id_token (AssumeRoleWithWebIdentity) and gets temporary credentials for the person's role.",
+      "porque": "There are no long-lived keys. The role's trust policy only accepts that person's sub, and only before the expiry: another person's token or more hours than requested are rejected (measured O.3).",
+      "donde": "<code>web/app.js</code> and <code>scripts/solicitar.py</code> (<code>asumir</code> subcommand)."
+    },
+    "fila": "aplicada",
+    "nodos": ["persona", "sts", "rol-persona"],
+    "insignias": ["b9"],
+    "tramos": [
+      {"arista": "e9", "lleva": "id_token", "lleva_en": "id_token"},
+      {"arista": "e9", "inverso": true, "lleva": "credenciales (1 a 12 h)", "lleva_en": "credentials (1 to 12 h)"}
+    ]
+  },
+  {
+    "id": "F",
+    "titulo": "Si el aplicador falla",
+    "que": "Si el aplicador lanza (un control que no pudo ejecutarse, una fila ya decidida o un fallo de AWS), Lambda reintenta dos veces. El evento acaba en la cola de fallos, la alarma pasa a ALARM y SNS avisa al operador.",
+    "porque": "Un evento que falla no se pierde en silencio. IAM queda sin tocar y volver a tramitar es a mano. Medido con una fila provocada (M.2).",
+    "donde": "<code>infra/cfn/runtime.yaml</code> y <code>docs/MEDICIONES.md</code> M.2.",
+    "en": {
+      "titulo": "If the applier fails",
+      "que": "If the applier throws (a check that could not run, a row already decided or an AWS error), Lambda retries twice. The event ends up in the failure queue, the alarm goes to ALARM and SNS notifies the operator.",
+      "porque": "A failing event is never lost silently. IAM stays untouched and reprocessing is manual. Measured with a deliberately provoked row (M.2).",
+      "donde": "<code>infra/cfn/runtime.yaml</code> and <code>docs/MEDICIONES.md</code> M.2."
+    },
+    "fila": "aprobada",
+    "fallo": true,
+    "nodos": ["aplicador", "cola", "alarma", "sns", "operador"],
+    "insignias": ["bF"],
+    "tramos": [
+      {"arista": "f1", "lleva": "3 intentos fallidos", "lleva_en": "3 failed attempts"},
+      {"arista": "f2", "lleva": "mensajes > 0", "lleva_en": "messages > 0"},
+      {"arista": "f3", "lleva": "ALARM", "lleva_en": "ALARM"},
+      {"arista": "f4", "lleva": "correo al operador", "lleva_en": "email to operator"}
+    ]
+  }
+]
+</script>
+
+<script>
+(() => {
+  "use strict";
+  const PASOS = JSON.parse(document.getElementById("pasos").textContent);
+  const ESTADOS = ["propuesta", "aprobada", "aplicada"];
+  const SIGNIFICADO_EN = { propuesta: "proposed", aprobada: "approved", aplicada: "applied" };
+  // Lo que no se atenua: fronteras y titulo.
+  const FIJOS = new Set(["cuenta-agente", "region", "cuenta-gestion", "aux", "p2-title", "p2-subtitle", "p2-sep"]);
+  const UI = {
+    es: {
+      documento: "Recorrido Agente IAM",
+      titulo: "Agente IAM: el recorrido de una solicitud",
+      subtitulo: "Animacion del diagrama de despliegue. Cada paso dice que pasa, por que se hizo asi y donde mirarlo en el repositorio. Estado medido el 26-10-2026.",
+      lienzo: "Diagrama de despliegue en AWS",
+      anterior: "◀ Anterior", anteriorAria: "Paso anterior",
+      reproducir: "▶ Reproducir", reproducirAria: "Reproducir el recorrido",
+      pausa: "❚❚ Pausa", pausaAria: "Pausar",
+      siguiente: "Siguiente ▶", siguienteAria: "Paso siguiente",
+      reiniciar: "Reiniciar", reiniciarAria: "Volver a la vista general",
+      pasos: "Pasos", paso: "Paso", vista: "Vista general",
+      que: "Que pasa", porque: "Por que asi", donde: "Donde mirarlo", fila: "Estado de la fila en DynamoDB",
+      sinFila: "Todavia no hay fila.",
+      notaFallo: "(se queda aprobada: no llega a aplicarse)",
+      ayuda: "Teclado: flechas izquierda y derecha para cambiar de paso, espacio para reproducir o pausar. Si el sistema pide reducir el movimiento, la animacion resalta las flechas sin mover nada.",
+    },
+    en: {
+      documento: "Agente IAM walkthrough",
+      titulo: "Agente IAM: the path of a request",
+      subtitulo: "An animation of the deployment diagram. Each step says what happens, why it was built that way and where to look in the repository. State as measured on 2026-10-26.",
+      lienzo: "AWS deployment diagram",
+      anterior: "◀ Back", anteriorAria: "Previous step",
+      reproducir: "▶ Play", reproducirAria: "Play the walkthrough",
+      pausa: "❚❚ Pause", pausaAria: "Pause",
+      siguiente: "Next ▶", siguienteAria: "Next step",
+      reiniciar: "Restart", reiniciarAria: "Back to the overview",
+      pasos: "Steps", paso: "Step", vista: "Overview",
+      que: "What happens", porque: "Why this way", donde: "Where to look", fila: "Row state in DynamoDB",
+      sinFila: "No row yet.",
+      notaFallo: "(stays aprobada: it never gets applied)",
+      ayuda: "Keyboard: left and right arrows change the step, space plays or pauses. If your system asks for reduced motion, the animation highlights the arrows without moving anything.",
+    },
+  };
+
+  const lienzo = document.querySelector(".lienzo");
+  const chip = document.querySelector(".chip-lleva");
+  const tarjeta = document.querySelector(".tarjeta");
+  const listaPasos = document.querySelector(".pasos");
+  const barra = document.querySelector(".progreso div");
+  const btn = {
+    anterior: document.getElementById("anterior"),
+    reproducir: document.getElementById("reproducir"),
+    siguiente: document.getElementById("siguiente"),
+    reiniciar: document.getElementById("reiniciar"),
+  };
+  const movimiento = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const NS = "http://www.w3.org/2000/svg";
+
+  // Un diagrama por idioma; los dos tienen los mismos ids de celda.
+  // Se preparan los dos visibles (getBBox no mide lo oculto) y luego se oculta uno.
+  function preparar(contenedor) {
+    const svg = contenedor.querySelector("svg");
+    const celda = (id) => svg.querySelector(`[data-cell-id="${CSS.escape(id)}"]`);
+    const celdas = Array.from(celda("1").children).filter((g) => g.dataset && g.dataset.cellId);
+    for (const g of celdas) {
+      const id = g.dataset.cellId;
+      if (id.startsWith("ley")) g.style.display = "none"; // la leyenda la sustituye el panel
+      else if (!FIJOS.has(id)) g.classList.add("celda");
+    }
+    const leyenda = celda("leyenda-fondo");
+    if (leyenda) {
+      const vb = svg.viewBox.baseVal;
+      const bb = leyenda.getBBox();
+      svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${bb.x - 20 - vb.x} ${vb.height}`);
+    }
+    svg.removeAttribute("width");
+    svg.removeAttribute("height");
+    const paquete = document.createElementNS(NS, "g");
+    paquete.setAttribute("class", "paquete");
+    paquete.style.display = "none";
+    const punto = document.createElementNS(NS, "circle");
+    punto.setAttribute("r", "11");
+    punto.setAttribute("stroke-width", "3");
+    paquete.appendChild(punto);
+    svg.appendChild(paquete);
+    return { contenedor, svg, celda, celdas, paquete, punto };
+  }
+  const DIAGRAMAS = {};
+  document.querySelectorAll(".diagrama").forEach((c) => { DIAGRAMAS[c.dataset.idioma] = preparar(c); });
+
+  function leerIdioma() {
+    const url = new URLSearchParams(location.search).get("lang");
+    if (url === "es" || url === "en") return url;
+    try {
+      const guardado = localStorage.getItem("agente-iam-idioma");
+      if (guardado === "es" || guardado === "en") return guardado;
+    } catch (e) { /* almacenamiento bloqueado: se sigue con el navegador */ }
+    return (navigator.language || "es").toLowerCase().startsWith("es") ? "es" : "en";
+  }
+
+  let idioma = leerIdioma();
+  let d = DIAGRAMAS[idioma];
+  let actual = 0;
+  let reproduciendo = false;
+  let generacion = 0; // cada cambio de paso o de idioma invalida las animaciones en curso
+
+  const t = (clave) => UI[idioma][clave];
+  const texto = (paso) => (idioma === "en" ? paso.en : paso);
+
+  const esperar = (ms, gen) =>
+    new Promise((ok) => setTimeout(() => ok(gen === generacion), ms));
+
+  const linea = (g) =>
+    Array.from(g.querySelectorAll("path")).find(
+      (p) => p.getAttribute("fill") === "none" && p.closest("[data-cell-id]") === g
+    );
+
+  function posicion(path, largo) {
+    const p = path.getPointAtLength(largo);
+    const pt = new DOMPoint(p.x, p.y).matrixTransform(path.getScreenCTM());
+    const enSvg = pt.matrixTransform(d.svg.getScreenCTM().inverse());
+    const caja = lienzo.getBoundingClientRect();
+    return { svg: enSvg, x: pt.x - caja.left + lienzo.scrollLeft, y: pt.y - caja.top + lienzo.scrollTop };
+  }
+
+  function recorrer(tramo, fallo, gen) {
+    const g = d.celda(tramo.arista);
+    if (!g) return Promise.resolve(true);
+    g.classList.remove("atenuada");
+    g.classList.add(fallo ? "activa-fallo" : "activa");
+    const path = linea(g);
+    chip.textContent = (idioma === "en" ? tramo.lleva_en : tramo.lleva) || "";
+    chip.classList.toggle("fallo", !!fallo);
+    if (movimiento.matches || !path) {
+      if (path) {
+        const medio = posicion(path, path.getTotalLength() / 2);
+        chip.style.left = medio.x + "px";
+        chip.style.top = medio.y + "px";
+        chip.classList.add("visible");
+      }
+      return esperar(1400, gen);
+    }
+    const largo = path.getTotalLength();
+    const dur = Math.max(900, Math.min(2600, largo * 2.4));
+    d.paquete.classList.toggle("fallo", !!fallo);
+    d.paquete.style.display = "";
+    chip.classList.add("visible");
+    return new Promise((ok) => {
+      const t0 = performance.now();
+      function cuadro(ahora) {
+        if (gen !== generacion) return ok(false);
+        const u = Math.min(1, (ahora - t0) / dur);
+        const e = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2;
+        const pos = posicion(path, (tramo.inverso ? 1 - e : e) * largo);
+        d.punto.setAttribute("cx", pos.svg.x);
+        d.punto.setAttribute("cy", pos.svg.y);
+        chip.style.left = pos.x + "px";
+        chip.style.top = pos.y + "px";
+        if (u < 1) requestAnimationFrame(cuadro);
+        else setTimeout(() => ok(gen === generacion), 250);
+      }
+      requestAnimationFrame(cuadro);
+    });
+  }
+
+  function encuadrar(paso) {
+    const ids = paso.nodos.concat(paso.tramos.map((x) => x.arista));
+    if (!ids.length || lienzo.scrollWidth <= lienzo.clientWidth + 4) return;
+    const caja = lienzo.getBoundingClientRect();
+    let min = Infinity, max = -Infinity;
+    for (const id of ids) {
+      const g = d.celda(id);
+      if (!g) continue;
+      const r = g.getBoundingClientRect();
+      min = Math.min(min, r.left);
+      max = Math.max(max, r.right);
+    }
+    const base = lienzo.scrollLeft - caja.left;
+    // Si el paso cabe, se centra; si no, se ve desde su borde izquierdo.
+    const izquierda = max - min > lienzo.clientWidth - 24
+      ? min + base - 12
+      : (min + max) / 2 + base - lienzo.clientWidth / 2;
+    lienzo.scrollTo({ left: izquierda, behavior: movimiento.matches ? "auto" : "smooth" });
+  }
+
+  function pintarFila(estado, fallo) {
+    const fila = tarjeta.querySelector(".fila");
+    fila.textContent = "";
+    if (!estado) {
+      const s = document.createElement("span");
+      s.textContent = t("sinFila");
+      s.className = "sep";
+      fila.appendChild(s);
+      return;
+    }
+    ESTADOS.forEach((nombre, i) => {
+      if (i) {
+        const sep = document.createElement("span");
+        sep.className = "sep";
+        sep.textContent = "›";
+        fila.appendChild(sep);
+      }
+      const s = document.createElement("span");
+      s.className = "estado" + (nombre === estado ? " actual" + (fallo ? " fallo" : "") : "");
+      s.textContent = nombre; // el valor real de la tabla, igual en los dos idiomas
+      if (idioma === "en") s.title = SIGNIFICADO_EN[nombre];
+      fila.appendChild(s);
+    });
+    if (fallo) {
+      const nota = document.createElement("span");
+      nota.className = "sep";
+      nota.textContent = t("notaFallo");
+      fila.appendChild(nota);
+    }
+  }
+
+  function ponerBoton() {
+    btn.reproducir.textContent = reproduciendo ? t("pausa") : t("reproducir");
+    btn.reproducir.setAttribute("aria-label", reproduciendo ? t("pausaAria") : t("reproducirAria"));
+  }
+
+  function textosFijos() {
+    document.documentElement.lang = idioma;
+    document.title = t("documento");
+    document.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n); });
+    lienzo.setAttribute("aria-label", t("lienzo"));
+    for (const k of ["anterior", "siguiente", "reiniciar"]) {
+      btn[k].textContent = t(k);
+      btn[k].setAttribute("aria-label", t(k + "Aria"));
+    }
+    listaPasos.setAttribute("aria-label", t("pasos"));
+    listaPasos.querySelectorAll("button").forEach((b, i) => {
+      const p = PASOS[i];
+      const titulo = texto(p).titulo;
+      b.setAttribute("aria-label", p.id === "0" ? t("vista") : `${t("paso")} ${p.id}: ${titulo}`);
+      b.title = titulo;
+    });
+    document.querySelectorAll(".idioma button").forEach((b) => {
+      b.setAttribute("aria-pressed", String(b.dataset.idioma === idioma));
+    });
+    for (const [clave, diag] of Object.entries(DIAGRAMAS)) diag.contenedor.hidden = clave !== idioma;
+    ponerBoton();
+  }
+
+  async function mostrar(i) {
+    const gen = ++generacion;
+    actual = i;
+    const paso = PASOS[i];
+    const tx = texto(paso);
+    // Panel
+    const h2 = tarjeta.querySelector("h2");
+    h2.textContent = "";
+    if (paso.id !== "0") {
+      const num = document.createElement("span");
+      num.className = "num";
+      num.textContent = paso.id;
+      h2.appendChild(num);
+    }
+    h2.appendChild(document.createTextNode(tx.titulo));
+    tarjeta.querySelector(".que").textContent = tx.que;
+    tarjeta.querySelector(".porque").textContent = tx.porque;
+    tarjeta.querySelector(".donde").innerHTML = tx.donde; // texto propio de la plantilla
+    tarjeta.classList.toggle("es-fallo", !!paso.fallo);
+    pintarFila(paso.fila, paso.fallo);
+    listaPasos.querySelectorAll("button").forEach((b, k) => {
+      if (k === i) b.setAttribute("aria-current", "step");
+      else b.removeAttribute("aria-current");
+    });
+    barra.style.width = `${(i / (PASOS.length - 1)) * 100}%`;
+    btn.anterior.disabled = i === 0;
+    btn.siguiente.disabled = i === PASOS.length - 1;
+    // Diagrama
+    d.paquete.style.display = "none";
+    chip.classList.remove("visible");
+    const vista = paso.tramos.length === 0;
+    const enFoco = new Set(paso.nodos.concat(paso.insignias));
+    for (const g of d.celdas) {
+      g.classList.remove("activa", "activa-fallo", "foco");
+      if (!g.classList.contains("celda")) continue;
+      const id = g.dataset.cellId;
+      g.classList.toggle("atenuada", !vista && !enFoco.has(id));
+      if (enFoco.has(id) && !id.startsWith("b")) g.classList.add("foco");
+    }
+    encuadrar(paso);
+    for (const tramo of paso.tramos) {
+      if (!(await recorrer(tramo, paso.fallo, gen))) return false;
+    }
+    d.paquete.style.display = "none";
+    chip.classList.remove("visible");
+    return gen === generacion;
+  }
+
+  async function reproducir() {
+    reproduciendo = true;
+    ponerBoton();
+    let i = actual === PASOS.length - 1 ? 0 : actual;
+    if (i === 0) i = 1;
+    while (reproduciendo && i < PASOS.length) {
+      const completo = await mostrar(i);
+      if (!completo || !reproduciendo) return;
+      const gen = generacion;
+      if (!(await esperar(1800, gen)) || !reproduciendo) return;
+      i += 1;
+    }
+    reproduciendo = false;
+    ponerBoton();
+  }
+
+  function parar() {
+    reproduciendo = false;
+    ponerBoton();
+  }
+
+  function cambiarIdioma(nuevo) {
+    if (nuevo === idioma) return;
+    parar();
+    generacion++; // corta la animacion del otro diagrama
+    d.paquete.style.display = "none";
+    chip.classList.remove("visible");
+    idioma = nuevo;
+    d = DIAGRAMAS[idioma];
+    try { localStorage.setItem("agente-iam-idioma", idioma); } catch (e) { /* sin almacenamiento */ }
+    textosFijos();
+    mostrar(actual);
+  }
+
+  PASOS.forEach((p, i) => {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = p.id === "0" ? "⌂" : p.id;
+    if (p.fallo) b.classList.add("fallo");
+    b.addEventListener("click", () => { parar(); mostrar(i); });
+    li.appendChild(b);
+    listaPasos.appendChild(li);
+  });
+
+  document.querySelectorAll(".idioma button").forEach((b) => {
+    b.addEventListener("click", () => cambiarIdioma(b.dataset.idioma));
+  });
+  btn.reproducir.addEventListener("click", () => (reproduciendo ? parar() : reproducir()));
+  btn.siguiente.addEventListener("click", () => { parar(); if (actual < PASOS.length - 1) mostrar(actual + 1); });
+  btn.anterior.addEventListener("click", () => { parar(); if (actual > 0) mostrar(actual - 1); });
+  btn.reiniciar.addEventListener("click", () => { parar(); mostrar(0); });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.target.closest && ev.target.closest("button") && ev.key === " ") return; // el boton ya responde
+    if (ev.key === "ArrowRight") { ev.preventDefault(); btn.siguiente.click(); }
+    else if (ev.key === "ArrowLeft") { ev.preventDefault(); btn.anterior.click(); }
+    else if (ev.key === " ") { ev.preventDefault(); btn.reproducir.click(); }
+  });
+
+  textosFijos();
+  mostrar(0);
+})();
+</script>
+</body>
+</html>

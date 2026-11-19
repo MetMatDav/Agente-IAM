@@ -1,0 +1,461 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Agente IAM - personas, grupos y permission sets del proyecto en IAM Identity
+  Center. Se despliega en la cuenta de gestion, region us-east-1 (la de
+  Identity Center).
+
+# Por que existe (Fase 15). Creada el 23-10-2026 con el aprobador de demo
+# para la Prueba B; ampliada el mismo dia con el diseno del bloque 3
+# (PLAN-CORRECCIONES.md, "Bloque 3: diseno aprobado").
+#
+# El acceso se da por GRUPO, nunca a una persona: dar o quitar acceso es
+# meter o sacar a alguien de un grupo. Tres grupos, tres papeles:
+#
+#   solicitantes  ninguna cuenta. Solo la aplicacion SAML: piden con el
+#                 token de Cognito (ADR-001), sin credenciales de AWS.
+#   aprobadores   AgenteIAM-Aprobador en agente-iam: leer una solicitud e
+#                 invocar la Lambda de aprobacion por su URL; no escriben la
+#                 tabla. No asume el rol del aplicador (lo asume una Lambda) ni
+#                 puede reescribir la propuesta.
+#   operadores    AgenteIAM-Operador en agente-iam: desplegar las pilas
+#                 agente-iam-* SOLO a traves de CloudFormation con el rol de
+#                 servicio AgenteIAM-Despliegue. Quien despliega no aprueba.
+#
+# AgenteIAM-Lectura (metadatos y configuracion, ningun dato) no tiene grupo
+# aqui: es para los MCP y la auditoria y se asigna con OperadoresLeen.
+#
+# Lo que esta pila NO hace: crear la aplicacion SAML (solo por consola; su
+# ARN entra como parametro cuando exista), poner contrasenas (un usuario
+# creado por API no recibe invitacion: la contrasena de un solo uso la
+# genera Mateo en consola) ni tocar AWSAdministratorAccess, que queda como
+# acceso de emergencia.
+#
+# Sin etiquetas cortas: la lee yaml.safe_load en los tests
+# (tests/seguridad/test_plantillas_cfn.py).
+
+Parameters:
+  IdentityStoreId:
+    Type: String
+    Description: Id del almacen de identidades de Identity Center (d-xxxxxxxxxx).
+    AllowedPattern: "^d-[0-9a-f]{10}$"
+  InstanceArn:
+    Type: String
+    Description: ARN de la instancia de Identity Center (arn:aws:sso:::instance/ssoins-...).
+    AllowedPattern: "^arn:aws:sso:::instance/ssoins-[0-9a-f]{16}$"
+  CuentaAgenteIam:
+    Type: String
+    Description: Id de la cuenta agente-iam, la unica donde se asignan permission sets. No va en el repositorio.
+    AllowedPattern: "^[0-9]{12}$"
+  AprobadorEmail:
+    Type: String
+    Description: Correo del aprobador de demo. Dato personal - se pasa al desplegar, nunca va en el repositorio.
+    AllowedPattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+  SolicitanteEmail:
+    Type: String
+    Description: Correo del solicitante de demo. Dato personal - se pasa al desplegar, nunca va en el repositorio.
+    AllowedPattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+  MateoUserId:
+    Type: String
+    Description: Id en el almacen de identidades del usuario de Mateo, que no crea esta pila. Entra en operadores y solicitantes.
+    AllowedPattern: "^[0-9a-f-]{10,47}$"
+  AplicacionSamlArn:
+    Type: String
+    Default: ""
+    Description: ARN de la aplicacion SAML agente-iam-cognito (etapa de acceso). Vacio hasta que exista; entonces se le asignan los grupos.
+
+Conditions:
+  HayAplicacionSaml:
+    Fn::Not:
+      - Fn::Equals:
+          - Ref: AplicacionSamlArn
+          - ""
+
+Resources:
+  # --- Personas ------------------------------------------------------------
+  # Retain: borrar la pila no debe borrar una persona del directorio (ni su
+  # historial en CloudTrail pierde a quien referirse).
+
+  AprobadorDemo:
+    Type: AWS::IdentityStore::User
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      IdentityStoreId:
+        Ref: IdentityStoreId
+      UserName: aprobador.demo
+      DisplayName: Aprobador Demo
+      Name:
+        GivenName: Aprobador
+        FamilyName: Demo
+      Emails:
+        - Value:
+            Ref: AprobadorEmail
+          Type: work
+          Primary: true
+      Title: Aprobador de solicitudes de acceso (demo)
+
+  SolicitanteDemo:
+    Type: AWS::IdentityStore::User
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      IdentityStoreId:
+        Ref: IdentityStoreId
+      UserName: solicitante.demo
+      DisplayName: Solicitante Demo
+      Name:
+        GivenName: Solicitante
+        FamilyName: Demo
+      Emails:
+        - Value:
+            Ref: SolicitanteEmail
+          Type: work
+          Primary: true
+      Title: Desarrollador que pide permisos para el rol de su aplicacion (demo)
+
+  # --- Grupos y pertenencias -------------------------------------------------
+
+  GrupoSolicitantes:
+    Type: AWS::IdentityStore::Group
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      IdentityStoreId:
+        Ref: IdentityStoreId
+      DisplayName: agente-iam-solicitantes
+      Description: Piden permisos al agente con el token de Cognito. Sin acceso a ninguna cuenta.
+
+  GrupoAprobadores:
+    Type: AWS::IdentityStore::Group
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      IdentityStoreId:
+        Ref: IdentityStoreId
+      DisplayName: agente-iam-aprobadores
+      Description: Aprueban o rechazan solicitudes en agente-iam. No despliegan ni aplican.
+
+  GrupoOperadores:
+    Type: AWS::IdentityStore::Group
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      IdentityStoreId:
+        Ref: IdentityStoreId
+      DisplayName: agente-iam-operadores
+      Description: Despliegan las pilas agente-iam-* por CloudFormation. No aprueban.
+
+  AprobadorEnAprobadores:
+    Type: AWS::IdentityStore::GroupMembership
+    Properties:
+      IdentityStoreId:
+        Ref: IdentityStoreId
+      GroupId:
+        Fn::GetAtt: [GrupoAprobadores, GroupId]
+      MemberId:
+        UserId:
+          Fn::GetAtt: [AprobadorDemo, UserId]
+
+  SolicitanteEnSolicitantes:
+    Type: AWS::IdentityStore::GroupMembership
+    Properties:
+      IdentityStoreId:
+        Ref: IdentityStoreId
+      GroupId:
+        Fn::GetAtt: [GrupoSolicitantes, GroupId]
+      MemberId:
+        UserId:
+          Fn::GetAtt: [SolicitanteDemo, UserId]
+
+  # Mateo opera y puede pedir (para probar), pero NO aprueba: quien
+  # despliega el codigo del agente no puede ser quien firma lo que propone.
+  MateoEnOperadores:
+    Type: AWS::IdentityStore::GroupMembership
+    Properties:
+      IdentityStoreId:
+        Ref: IdentityStoreId
+      GroupId:
+        Fn::GetAtt: [GrupoOperadores, GroupId]
+      MemberId:
+        UserId:
+          Ref: MateoUserId
+
+  MateoEnSolicitantes:
+    Type: AWS::IdentityStore::GroupMembership
+    Properties:
+      IdentityStoreId:
+        Ref: IdentityStoreId
+      GroupId:
+        Fn::GetAtt: [GrupoSolicitantes, GroupId]
+      MemberId:
+        UserId:
+          Ref: MateoUserId
+
+  # --- Permission sets ---------------------------------------------------------
+
+  # Metadatos y configuracion, ningun dato. SecurityAudit y ViewOnlyAccess
+  # se comprobaron el 23-10-2026 contra sus versiones v94 y v47: ninguna
+  # permite leer objetos de S3, filas de DynamoDB, secretos, parametros,
+  # logs ni tokens de AgentCore, y entre las dos cubren las lecturas de
+  # AgentCore, Bedrock y Service Quotas que AWSReadOnlyAccess no tiene. El
+  # Deny es por si AWS amplia esas politicas gestionadas manana.
+  PermisosLectura:
+    Type: AWS::SSO::PermissionSet
+    Properties:
+      InstanceArn:
+        Ref: InstanceArn
+      Name: AgenteIAM-Lectura
+      Description: Agente IAM - metadatos y configuracion para auditar y para los MCP. Ningun dato.
+      SessionDuration: PT4H
+      ManagedPolicies:
+        - arn:aws:iam::aws:policy/SecurityAudit
+        - arn:aws:iam::aws:policy/job-function/ViewOnlyAccess
+      InlinePolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: NuncaDatosNiCredenciales
+            Effect: Deny
+            Action:
+              - s3:GetObject*
+              - dynamodb:GetItem
+              - dynamodb:BatchGetItem
+              - dynamodb:Query
+              - dynamodb:Scan
+              - dynamodb:GetRecords
+              - secretsmanager:GetSecretValue
+              - ssm:GetParameter*
+              - kms:Decrypt
+              - logs:GetLogEvents
+              - logs:FilterLogEvents
+              - logs:StartQuery
+              - bedrock-agentcore:GetWorkloadAccessToken*
+              - bedrock-agentcore:GetResource*
+              - bedrock-agentcore:InvokeAgentRuntime
+              - lambda:GetFunction
+              - lambda:InvokeFunction
+              - sts:AssumeRole*
+            Resource: "*"
+
+  # Lo que hace la persona que aprueba y nada mas (ADR-003, 24-10-2026): leer
+  # la fila para ensenarla e invocar la Lambda agente-iam-aprobacion por su URL.
+  # Antes escribia ella misma la decision en la tabla (UpdateItem acotado por
+  # dynamodb:Attributes) y revalidaba con IAM y Access Analyzer; eso lo hace
+  # ahora la Lambda con su propio rol, que ve quien firmo y corre los
+  # controles. Un cliente modificado ya no puede ni intentar escribir la tabla.
+  #   - GetItem a mano: el cliente lee la fila para ensenar la huella.
+  #   - Dos sentencias de invocacion, no una: en una sola las dos condiciones
+  #     se exigirian a la vez sobre cada accion (AND) y ninguna pasaria.
+  #     InvokeFunctionUrl pide que la URL sea AWS_IAM; InvokeFunction solo
+  #     vale si la llamada llega por la URL, nunca por la API de Lambda.
+  #   - Deny de escritura de la tabla: aunque otro permission set o politica
+  #     futura concediera algo, esta persona no escribe filas (PartiQL incluido).
+  #   - Sin iam:*, sin access-analyzer:* ni sts:AssumeRole: el aplicador es una
+  #     Lambda y la revalidacion es de la Lambda de aprobacion.
+  PermisosAprobador:
+    Type: AWS::SSO::PermissionSet
+    Properties:
+      InstanceArn:
+        Ref: InstanceArn
+      Name: AgenteIAM-Aprobador
+      Description: Agente IAM - leer una solicitud e invocar la Lambda de aprobacion por su URL. No escribe la tabla ni aplica ni despliega.
+      SessionDuration: PT1H
+      InlinePolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: LeerLaSolicitud
+            Effect: Allow
+            Action: dynamodb:GetItem
+            Resource:
+              Fn::Sub: arn:aws:dynamodb:us-east-1:${CuentaAgenteIam}:table/agente-iam-solicitudes
+          - Sid: InvocarLaAprobacionPorSuUrl
+            Effect: Allow
+            Action: lambda:InvokeFunctionUrl
+            Resource:
+              Fn::Sub: arn:aws:lambda:us-east-1:${CuentaAgenteIam}:function:agente-iam-aprobacion
+            Condition:
+              StringEquals:
+                lambda:FunctionUrlAuthType: AWS_IAM
+          - Sid: InvocarLaAprobacionSoloViaUrl
+            Effect: Allow
+            Action: lambda:InvokeFunction
+            Resource:
+              Fn::Sub: arn:aws:lambda:us-east-1:${CuentaAgenteIam}:function:agente-iam-aprobacion
+            Condition:
+              Bool:
+                lambda:InvokedViaFunctionUrl: "true"
+          - Sid: NuncaEscribirLaTabla
+            Effect: Deny
+            Action:
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+              - dynamodb:DeleteItem
+              - dynamodb:BatchWriteItem
+              - dynamodb:PartiQLInsert
+              - dynamodb:PartiQLUpdate
+              - dynamodb:PartiQLDelete
+            Resource:
+              Fn::Sub: arn:aws:dynamodb:us-east-1:${CuentaAgenteIam}:table/agente-iam-solicitudes
+
+  # Desplegar = pedirselo a CloudFormation con el rol AgenteIAM-Despliegue.
+  # Sin ese rol (cloudformation:RoleArn) CloudFormation usaria las
+  # credenciales del operador, que no pueden crear nada: no hay atajo.
+  # La pila de arranque (la que define AgenteIAM-Despliegue) queda fuera:
+  # si el operador pudiera cambiarla, podria ampliarse sus propios permisos.
+  PermisosOperador:
+    Type: AWS::SSO::PermissionSet
+    Properties:
+      InstanceArn:
+        Ref: InstanceArn
+      Name: AgenteIAM-Operador
+      Description: Agente IAM - desplegar las pilas agente-iam-* por CloudFormation con el rol de despliegue.
+      SessionDuration: PT1H
+      ManagedPolicies:
+        - arn:aws:iam::aws:policy/SecurityAudit
+        - arn:aws:iam::aws:policy/job-function/ViewOnlyAccess
+      InlinePolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: CambiarPilasSoloConElRolDeDespliegue
+            Effect: Allow
+            Action:
+              - cloudformation:CreateStack
+              - cloudformation:UpdateStack
+              - cloudformation:CreateChangeSet
+              - cloudformation:DeleteStack
+            Resource:
+              Fn::Sub: arn:aws:cloudformation:us-east-1:${CuentaAgenteIam}:stack/agente-iam-*/*
+            Condition:
+              StringEquals:
+                cloudformation:RoleArn:
+                  Fn::Sub: arn:aws:iam::${CuentaAgenteIam}:role/AgenteIAM-Despliegue
+          - Sid: EjecutarYRevisarConjuntosDeCambios
+            Effect: Allow
+            Action:
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:ContinueUpdateRollback
+              - cloudformation:CancelUpdateStack
+              - cloudformation:DetectStackDrift
+              - cloudformation:DetectStackResourceDrift
+            Resource:
+              Fn::Sub: arn:aws:cloudformation:us-east-1:${CuentaAgenteIam}:stack/agente-iam-*/*
+          - Sid: ValidarPlantillasNoTieneRecurso
+            Effect: Allow
+            Action:
+              - cloudformation:ValidateTemplate
+              - cloudformation:GetTemplateSummary
+            Resource: "*"
+          - Sid: PasarSoloElRolDeDespliegueSoloACloudFormation
+            Effect: Allow
+            Action: iam:PassRole
+            Resource:
+              Fn::Sub: arn:aws:iam::${CuentaAgenteIam}:role/AgenteIAM-Despliegue
+            Condition:
+              StringEquals:
+                iam:PassedToService: cloudformation.amazonaws.com
+          - Sid: SubirElPaqueteDelCodigo
+            Effect: Allow
+            Action: s3:PutObject
+            Resource:
+              Fn::Sub: arn:aws:s3:::agente-iam-despliegue-${CuentaAgenteIam}/agente-iam/*
+          # Leerla si (sus salidas); cambiarla nunca.
+          - Sid: NuncaCambiarLaPilaDeArranque
+            Effect: Deny
+            Action:
+              - cloudformation:CreateStack
+              - cloudformation:UpdateStack
+              - cloudformation:DeleteStack
+              - cloudformation:CreateChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:ContinueUpdateRollback
+              - cloudformation:CancelUpdateStack
+              - cloudformation:SetStackPolicy
+              - cloudformation:UpdateTerminationProtection
+            Resource:
+              Fn::Sub: arn:aws:cloudformation:us-east-1:${CuentaAgenteIam}:stack/agente-iam-arranque/*
+          - Sid: NuncaDatosNiCredenciales
+            Effect: Deny
+            Action:
+              - s3:GetObject*
+              - dynamodb:GetItem
+              - dynamodb:BatchGetItem
+              - dynamodb:Query
+              - dynamodb:Scan
+              - dynamodb:GetRecords
+              - secretsmanager:GetSecretValue
+              - ssm:GetParameter*
+              - kms:Decrypt
+              - bedrock-agentcore:GetWorkloadAccessToken*
+              - bedrock-agentcore:GetResource*
+              - sts:AssumeRole*
+            Resource: "*"
+
+  # --- Asignaciones: siempre a un grupo, solo en agente-iam --------------------
+
+  AprobadoresEnAgenteIam:
+    Type: AWS::SSO::Assignment
+    Properties:
+      InstanceArn:
+        Ref: InstanceArn
+      PermissionSetArn:
+        Fn::GetAtt: [PermisosAprobador, PermissionSetArn]
+      PrincipalType: GROUP
+      PrincipalId:
+        Fn::GetAtt: [GrupoAprobadores, GroupId]
+      TargetType: AWS_ACCOUNT
+      TargetId:
+        Ref: CuentaAgenteIam
+
+  OperadoresEnAgenteIam:
+    Type: AWS::SSO::Assignment
+    Properties:
+      InstanceArn:
+        Ref: InstanceArn
+      PermissionSetArn:
+        Fn::GetAtt: [PermisosOperador, PermissionSetArn]
+      PrincipalType: GROUP
+      PrincipalId:
+        Fn::GetAtt: [GrupoOperadores, GroupId]
+      TargetType: AWS_ACCOUNT
+      TargetId:
+        Ref: CuentaAgenteIam
+
+  OperadoresLeen:
+    Type: AWS::SSO::Assignment
+    Properties:
+      InstanceArn:
+        Ref: InstanceArn
+      PermissionSetArn:
+        Fn::GetAtt: [PermisosLectura, PermissionSetArn]
+      PrincipalType: GROUP
+      PrincipalId:
+        Fn::GetAtt: [GrupoOperadores, GroupId]
+      TargetType: AWS_ACCOUNT
+      TargetId:
+        Ref: CuentaAgenteIam
+
+  SolicitantesEnLaAplicacion:
+    Type: AWS::SSO::ApplicationAssignment
+    Condition: HayAplicacionSaml
+    Properties:
+      ApplicationArn:
+        Ref: AplicacionSamlArn
+      PrincipalType: GROUP
+      PrincipalId:
+        Fn::GetAtt: [GrupoSolicitantes, GroupId]
+
+Outputs:
+  AprobadorUserId:
+    Description: Id del usuario en el almacen de identidades (lo que aparece en CloudTrail como onBehalfOf.userId).
+    Value:
+      Fn::GetAtt: [AprobadorDemo, UserId]
+  SolicitanteUserId:
+    Description: Id del solicitante de demo en el almacen de identidades.
+    Value:
+      Fn::GetAtt: [SolicitanteDemo, UserId]
+  GrupoSolicitantesId:
+    Description: Id del grupo agente-iam-solicitantes (se asigna a la aplicacion SAML).
+    Value:
+      Fn::GetAtt: [GrupoSolicitantes, GroupId]

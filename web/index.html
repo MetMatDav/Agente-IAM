@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Agente IAM: pedir un permiso</title>
+<meta name="description" content="Una IA propone el permiso, una persona decide y el sistema lo aplica y lo retira solo.">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="es_CO">
+<meta property="og:title" content="Agente IAM: pedir un permiso en AWS">
+<meta property="og:description" content="Una IA propone el permiso, una persona decide y el sistema lo aplica y lo retira solo.">
+<meta property="og:url" content="https://agente-iam.mateo.solutions/">
+<meta property="og:image" content="https://agente-iam.mateo.solutions/vista-previa.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="627">
+<meta property="og:image:alt" content="Diagrama del despliegue en AWS del Agente IAM">
+<link rel="stylesheet" href="estilos.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>Agente IAM: pedir un permiso</h1>
+    <p>Pide un permiso temporal en la cuenta de AWS. El permiso se crea para ti, dura lo que pidas y lo aprueba una persona.</p>
+  </header>
+
+  <section id="entrar">
+    <button id="entrar_boton" type="button" class="primario">Entrar con Identity Center</button>
+  </section>
+
+  <section id="quien" hidden>
+    <p>Has entrado como <strong id="usuario"></strong></p>
+  </section>
+
+  <form id="formulario" hidden>
+    <div class="campo">
+      <label for="servicio">Servicio</label>
+      <select id="servicio" name="servicio" required></select>
+    </div>
+
+    <div class="campo">
+      <label for="recurso">Recurso</label>
+      <input id="recurso" name="recurso" type="text" required maxlength="256" autocomplete="off" aria-describedby="ayuda_recurso">
+      <small id="ayuda_recurso">nombre o ARN: del bucket, de la funcion, de la tabla...</small>
+    </div>
+
+    <div class="campo">
+      <label for="region">Region</label>
+      <select id="region" name="region" required></select>
+    </div>
+
+    <div class="campo">
+      <label for="horas">Horas de duracion</label>
+      <input id="horas" name="horas" type="number" step="1" required>
+    </div>
+
+    <div class="campo">
+      <label for="correo_aviso">Correo de aviso</label>
+      <input id="correo_aviso" name="correo_aviso" type="email" required autocomplete="email">
+    </div>
+
+    <div class="campo">
+      <label for="justificacion">Solicitud</label>
+      <textarea id="justificacion" name="justificacion" rows="5" required maxlength="1500" aria-describedby="ayuda_solicitud"></textarea>
+      <small id="ayuda_solicitud">Cuenta que recurso, que necesitas hacer (ver, subir, modificar, borrar), para que, y lo que no necesitas. Ejemplo: Necesito ver y subir archivos CSV en la carpeta cierres/ del bucket finanzas-reportes-2026 para preparar el cierre mensual. No necesito borrar nada ni tocar otras carpetas.</small>
+    </div>
+
+    <button id="enviar" type="submit" class="primario">Enviar solicitud</button>
+  </form>
+
+  <section id="resultado" hidden>
+    <h2>Tu solicitud</h2>
+    <dl>
+      <dt>Solicitud</dt>
+      <dd id="solicitud_id"></dd>
+      <dt>Estado</dt>
+      <dd id="estado"></dd>
+      <dt id="rol_previsto_etiqueta">Rol previsto</dt>
+      <dd id="rol_previsto"></dd>
+    </dl>
+    <p id="motivo"></p>
+    <p id="mensaje"></p>
+  </section>
+
+  <section id="credenciales" hidden>
+    <h2>Usar un acceso aprobado</h2>
+    <p>Cuando tu solicitud este aplicada, escribe aqui su id (llega en el correo) y obten tus credenciales.</p>
+    <p class="aviso">Estas credenciales son tuyas y temporales: no las pegues en ningun sitio que no controles</p>
+    <div class="campo">
+      <label for="solicitud_usar">Id de la solicitud</label>
+      <input id="solicitud_usar" name="solicitud_usar" type="text" maxlength="64" autocomplete="off" placeholder="req-AAAAMMDD-xxxxxxxx">
+    </div>
+    <div class="campo">
+      <label for="horas_sesion">Horas de la sesion</label>
+      <input id="horas_sesion" name="horas_sesion" type="number" step="1" min="1" value="1">
+    </div>
+    <button id="obtener" type="button" class="primario">Obtener credenciales</button>
+    <pre id="salida_credenciales"></pre>
+  </section>
+
+  <p id="error" role="alert"></p>
+</main>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

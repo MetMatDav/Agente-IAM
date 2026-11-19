@@ -1,0 +1,11 @@
+{
+  "solicitud_id": "req-005-ana",
+  "principal_arn_declarado": "arn:aws:iam::111122223333:role/app-finanzas-demo",
+  "campos": {
+    "servicio": "s3",
+    "recurso": "finanzas-2026",
+    "tipo_acceso": "lectura",
+    "region": "us-east-1"
+  },
+  "justificacion": "Soy Ana, de finanzas. La aplicacion de finanzas necesita descargar y listar los archivos del bucket para armar el cierre mensual."
+}

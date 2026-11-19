@@ -1,0 +1,119 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Agente IAM - denegacion de regiones por OU (CT.MULTISERVICE.PV.1) y SCP
+  que solo deja invocar Bedrock fuera de us-east-1 por perfiles us. de
+  Claude. Se despliega en la cuenta de gestion, region us-east-1.
+
+# Por que existe (Fase 15, medido el 23-10-2026): la denegacion de regiones
+# de la landing zone (GRREGIONDENY) solo permite us-east-1 y no exime
+# Bedrock. Los perfiles de inferencia evaluan tambien el modelo en cada
+# region de destino (us. -> us-east-2 y us-west-2; global. -> region
+# "unspecified"), asi que Haiku 4.5 quedaba denegado en agente-iam incluso
+# al administrador. Esa denegacion no se puede delimitar; esta pila pone en
+# su lugar la version configurable por OU y una SCP que cierra lo que la
+# exencion abre. Despues de desplegarla se apaga la de la landing zone
+# (paso aparte, en consola). Las SCP no aplican a la cuenta de gestion.
+#
+# Sin etiquetas cortas (!Select, !Sub...): la plantilla se lee con
+# yaml.safe_load en tests/seguridad/test_gobierno_regiones.py.
+
+Parameters:
+  WorkloadsOuArn:
+    Type: String
+    Description: ARN de la OU Workloads (ahi vive la cuenta agente-iam).
+    AllowedPattern: "^arn:aws:organizations::\\d{12}:ou/o-[a-z0-9]{10,32}/ou-[a-z0-9]{4,32}-[a-z0-9]{8,32}$"
+  SecurityOuArn:
+    Type: String
+    Description: ARN de la OU Security (cuentas de archivo de logs y de auditoria).
+    AllowedPattern: "^arn:aws:organizations::\\d{12}:ou/o-[a-z0-9]{10,32}/ou-[a-z0-9]{4,32}-[a-z0-9]{8,32}$"
+
+Resources:
+  # El unico freno a Bedrock fuera de us-east-1 una vez que PV.1 lo exime en
+  # Workloads. Deniega la invocacion salvo que la peticion sea en us-east-1
+  # o venga enrutada por un perfil us. de Claude creado en us-east-1:
+  #   - perfil us. desde us-east-1: el perfil y el modelo de origen se
+  #     evaluan en us-east-1 (no casa la primera condicion); el modelo en
+  #     us-east-2/us-west-2 lleva bedrock:InferenceProfileArn del perfil us.
+  #     (no casa la segunda). Pasa.
+  #   - global.: el modelo se evalua con region "unspecified" y el ARN del
+  #     perfil global. Deniega.
+  #   - llamada directa o desde otro endpoint: la clave no viene, y un
+  #     operador negado sobre una clave ausente es verdadero (con o sin
+  #     IfExists, en un Deny da igual). Deniega. No anadir nunca una
+  #     condicion Null "false" sobre esa clave: exigiria que existiera y
+  #     dejaria pasar justo las llamadas directas.
+  # Haiku 5.5, Sonnet 4.6 y Haiku 4.5 casan con el patron: no hay que
+  # tocarla al cambiar de modelo.
+  BedrockSoloPerfilUs:
+    Type: AWS::Organizations::Policy
+    Properties:
+      Name: agente-iam-bedrock-solo-perfil-us
+      Description: Bedrock fuera de us-east-1 solo por perfiles us. de Claude creados en us-east-1 - Agente IAM, Fase 15
+      Type: SERVICE_CONTROL_POLICY
+      # Solo Workloads: alli PV.1 exime Bedrock. En Security no hay
+      # exencion, y adjuntar SCP propias a esa OU puede provocar drift.
+      TargetIds:
+        - Fn::Select:
+            - 2
+            - Fn::Split:
+                - "/"
+                - Ref: WorkloadsOuArn
+      Content:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: BedrockFueraDeUsEast1SoloPorPerfilUs
+            Effect: Deny
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+            Resource: "*"
+            Condition:
+              StringNotEquals:
+                aws:RequestedRegion: us-east-1
+              ArnNotLike:
+                bedrock:InferenceProfileArn: arn:aws:bedrock:us-east-1:*:inference-profile/us.anthropic.claude-*
+      Tags:
+        - Key: proyecto
+          Value: agente-iam
+
+  # PV.1 en Workloads: solo us-east-1, con la invocacion de Bedrock exenta
+  # (Converse y ConverseStream se autorizan con estas dos acciones). Exacto,
+  # nunca bedrock:* (dejaria agentes, bases de conocimiento y ajuste fino en
+  # cualquier region). Sin ExemptedPrincipalArns: la API no admite lista
+  # vacia. DependsOn: la SCP existe antes que la exencion y, al borrar la
+  # pila, la exencion desaparece antes que la SCP.
+  DenegacionRegionesWorkloads:
+    Type: AWS::ControlTower::EnabledControl
+    DependsOn: BedrockSoloPerfilUs
+    Properties:
+      ControlIdentifier: arn:aws:controlcatalog:::control/ka8e3pkqefnjsxuyc26ji580
+      TargetIdentifier:
+        Ref: WorkloadsOuArn
+      Parameters:
+        - Key: AllowedRegions
+          Value:
+            - us-east-1
+        - Key: ExemptedActions
+          Value:
+            - bedrock:InvokeModel
+            - bedrock:InvokeModelWithResponseStream
+
+  # PV.1 en Security: solo us-east-1 y sin exenciones propias. Las cuentas de
+  # logs y de auditoria no usan Bedrock; eximirlo las dejaria abiertas.
+  DenegacionRegionesSecurity:
+    Type: AWS::ControlTower::EnabledControl
+    DependsOn: BedrockSoloPerfilUs
+    Properties:
+      ControlIdentifier: arn:aws:controlcatalog:::control/ka8e3pkqefnjsxuyc26ji580
+      TargetIdentifier:
+        Ref: SecurityOuArn
+      Parameters:
+        - Key: AllowedRegions
+          Value:
+            - us-east-1
+
+Outputs:
+  PoliticaBedrockId:
+    Description: Id de la SCP del proyecto.
+    Value:
+      Ref: BedrockSoloPerfilUs

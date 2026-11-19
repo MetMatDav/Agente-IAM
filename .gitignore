@@ -1,0 +1,73 @@
+# --- Python y herramientas de desarrollo ----------------------------------
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# --- Generado por el propio sistema ---------------------------------------
+# Registros de solicitudes: llevan ARNs, cuenta y nombres reales de la
+# cuenta AWS. Son el producto auditable, pero viven en el almacen (disco
+# local o DynamoDB), no en el repositorio. Los casos de prueba van en
+# ejemplos/, que si se versiona.
+solicitudes/*.json
+
+# Copia local de la Service Authorization Reference (catalogo.py). Se
+# vuelve a descargar sola.
+.cache/
+
+# Paquete de despliegue de AgentCore (scripts/empaquetar.sh). Se reconstruye.
+dist/
+
+# --- Secretos y configuracion local: nunca al repo ------------------------
+.env
+.env.*
+*.pem
+*.key
+.aws/
+credentials
+
+# Ajustes personales de Claude Code (CLAUDE.md si se versiona)
+.claude/settings.local.json
+
+# --- Editor y sistema -----------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*~
+*.bak*
+.DS_Store
+
+# --- Anadido en la Fase 9c ------------------------------------------------
+# Copias de ejemplos/ e infra/ con la cuenta real (scripts/localizar.py).
+local/
+# Respuestas de invoke-agent-runtime (pruebas manuales del runtime).
+respuesta*.json
+# El zip de despliegue fuera de dist/, y otros formatos de clave o estado.
+*.zip
+*.p12
+*.tfstate*
+
+# --- Anadido en la Fase 11 ------------------------------------------------
+# Evidencia de cada ejecucion de tests (scripts/pruebas.sh): JUnit, consola
+# y, en funcionales, registros con ARNs de la cuenta real.
+evidencias/
+
+# --- Anadido en la Fase 16 (orden del repositorio, 23-10-2026) ------------
+# Worktrees de Claude Code: cada uno es una copia entera del repo con su
+# propio .git; sin esta regla `git status` los lista como carpeta nueva.
+.claude/worktrees/
+# Restos de herramientas que aun no se usan aqui pero aparecerian sin
+# avisar al empezar: cobertura, hypothesis, tox/nox, un venv con otro
+# nombre y builds de paquete.
+.coverage.*
+coverage.xml
+.hypothesis/
+.tox/
+.nox/
+venv/
+build/

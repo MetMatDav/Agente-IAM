@@ -1,0 +1,123 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Agente IAM - sonda de aws:ResourceAccount (temporal). Un rol de solo lectura
+  que asume el administrador y recursos propios vacios contra los que llamar.
+  Cuenta agente-iam, us-east-1. Se borra al terminar.
+
+# Por que existe (Fase 18, tarea 2, 24-10-2026): antes de desplegar el Deny
+# SoloRecursosDeLaPropiaCuenta del techo hay que medir, con llamadas reales,
+# si las llamadas de los ocho servicios llevan aws:ResourceAccount y que haria
+# ese Deny. Lo mide scripts/sonda_cuenta.py asumiendo este rol cuatro veces,
+# cada una con una politica de sesion distinta.
+#
+# Lo despliega el administrador (org-agente-iam) y lo borra al acabar: el rol
+# es asumible mientras la pila exista. Los recursos van vacios y sin datos;
+# borrar la pila los borra todos.
+#
+# Sin etiquetas cortas: la lee yaml.safe_load en tests/seguridad/test_plantillas_cfn.py.
+
+Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName:
+        Fn::Sub: agente-iam-sonda-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+  Tabla:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    Properties:
+      TableName: agente-iam-sonda
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+
+  Cola:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    Properties:
+      QueueName: agente-iam-sonda
+      SqsManagedSseEnabled: true
+
+  Tema:
+    Type: AWS::SNS::Topic
+    DeletionPolicy: Delete
+    Properties:
+      TopicName: agente-iam-sonda
+
+  GrupoDeLogs:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: agente-iam-sonda
+      RetentionInDays: 1
+
+  RolSonda:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: agente-iam-sonda-cuenta
+      Description: Sonda temporal de aws:ResourceAccount. Solo lectura; solo la asume el administrador.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS:
+                Fn::Sub: arn:aws:iam::${AWS::AccountId}:root
+            Action: sts:AssumeRole
+            Condition:
+              ArnLike:
+                aws:PrincipalArn:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_AWSAdministratorAccess_*
+      Policies:
+        - PolicyName: SondaSoloLectura
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Resource "*": la sonda tambien lee recursos publicos de AWS
+              # (un bucket, un tema, imagenes y una capa), que no son nuestros.
+              - Sid: LoQueLaSondaLlama
+                Effect: Allow
+                Action:
+                  - s3:ListAllMyBuckets
+                  - s3:ListBucket
+                  - dynamodb:ListTables
+                  - dynamodb:DescribeTable
+                  - sqs:ListQueues
+                  - sqs:GetQueueAttributes
+                  - sns:ListTopics
+                  - sns:GetTopicAttributes
+                  - logs:DescribeLogGroups
+                  - logs:FilterLogEvents
+                  - cloudwatch:ListMetrics
+                  - ec2:DescribeRegions
+                  - ec2:DescribeInstances
+                  - ec2:DescribeImages
+                  - lambda:ListFunctions
+                  - lambda:GetLayerVersion
+                Resource: "*"
+
+Outputs:
+  RolArn:
+    Value:
+      Fn::GetAtt:
+        - RolSonda
+        - Arn

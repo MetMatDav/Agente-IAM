@@ -1,0 +1,250 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Agente IAM: pagina web estatica tras CloudFront (Fase 23, bloque 2)
+
+# Por que existe (diseno 5.6): la persona pide su acceso desde una pagina en
+# vez de la CLI. La pagina es estatica (HTML, CSS y JavaScript sin servidor
+# propio) y vive en un bucket privado al que solo lee CloudFront, y solo la
+# distribucion de esta pila (OAC con aws:SourceArn). Nadie llega al bucket por
+# su URL de S3: ni publico, ni por otra distribucion, ni sin TLS.
+#
+# Las cabeceras de seguridad (CSP, HSTS, nosniff, sin referrer, sin marcos) las
+# pone CloudFront con una politica de respuesta, porque S3 no puede ponerlas.
+# La CSP es la parte que importa: connect-src deja a la pagina hablar solo con
+# el dominio de Cognito, el endpoint de AgentCore y el de STS, y script-src
+# solo con ficheros propios (nada en linea), de modo que un fallo de escapado
+# no se convierte en codigo ni en una salida de datos hacia otro destino.
+#
+# Dominio propio (Fase 27, docs/ADR-005-dominio-propio-y-tls.md). Con el
+# certificado por defecto de CloudFront (*.cloudfront.net) la politica
+# TLSv1.2_2021 se ignora y queda TLSv1 (MEDIDO el 26-10-2026, MEDICIONES O.4,
+# GetDistribution). Con DominioWeb y CertificadoArn la distribucion responde en
+# agente-iam.mateo.solutions con un certificado de ACM propio en modo sni-only,
+# y ahi TLSv1.2_2021 si rige (documentacion de CloudFront; queda medirlo). El
+# certificado lo pide Mateo en la consola de esta cuenta, en us-east-1, y lo
+# valida con un CNAME en la zona de mateo.solutions, que esta en la cuenta de
+# gestion; los alias A y AAAA hacia la salida DominioCloudFront tambien los pone
+# el ahi. Esta pila no crea registros DNS. Sin los dos parametros la
+# distribucion queda como en la Fase 23. Los dos van juntos (regla
+# DominioYCertificadoVanJuntos) y el dominio solo admite el subdominio del
+# agente: cambiar de dominio es cambiar este patron, el de UrlRetornoWeb en
+# acceso.yaml y sus tests, a proposito.
+#
+# Orden de despliegue (docs/DESPLIEGUE.md): primero esta pila (da UrlWeb), luego
+# la pila de acceso con UrlRetornoWeb = UrlWeb + "/" (crea el cliente de Cognito
+# de la web) y luego la del runtime con el cliente nuevo. Con dominio propio,
+# UrlWeb pasa a ser la del dominio y la pila de acceso se actualiza con ella. Los ficheros de la
+# pagina los sube el administrador al bucket: esta pila no los crea.
+#
+# Sin etiquetas cortas: la lee yaml.safe_load en tests/seguridad/test_pila_web.py.
+
+Parameters:
+  DominioCognito:
+    Type: String
+    Description: Dominio de Cognito del pool (salida UrlDominio de la pila de acceso), sin barra final. Es el unico origen de Cognito que la CSP admite.
+    AllowedPattern: "^https://agente-iam-[0-9a-f]{6}\\.auth\\.us-east-1\\.amazoncognito\\.com$"
+  DominioWeb:
+    Type: String
+    Default: ""
+    Description: Nombre propio de la pagina (Fase 27). Vacio, la pagina sigue en su URL de CloudFront. Va junto con CertificadoArn.
+    AllowedPattern: "^(agente-iam\\.mateo\\.solutions)?$"
+  CertificadoArn:
+    Type: String
+    Default: ""
+    Description: ARN del certificado de ACM de esta cuenta, en us-east-1, que cubre DominioWeb. Va junto con DominioWeb.
+    AllowedPattern: "^(arn:aws:acm:us-east-1:[0-9]{12}:certificate/[0-9a-f-]{36})?$"
+
+Rules:
+  # Uno sin el otro no tiene sentido: un alias exige un certificado que lo
+  # cubra, y un certificado sin alias no cambia nada.
+  DominioYCertificadoVanJuntos:
+    Assertions:
+      - Assert:
+          Fn::Or:
+            - Fn::And:
+                - Fn::Equals: [Ref: DominioWeb, ""]
+                - Fn::Equals: [Ref: CertificadoArn, ""]
+            - Fn::And:
+                - Fn::Not:
+                    - Fn::Equals: [Ref: DominioWeb, ""]
+                - Fn::Not:
+                    - Fn::Equals: [Ref: CertificadoArn, ""]
+        AssertDescription: DominioWeb y CertificadoArn van los dos vacios o los dos con valor.
+
+Conditions:
+  ConDominio:
+    Fn::And:
+      - Fn::Not:
+          - Fn::Equals: [Ref: DominioWeb, ""]
+      - Fn::Not:
+          - Fn::Equals: [Ref: CertificadoArn, ""]
+
+Resources:
+  # Retain como los demas buckets: borrar la pila no borra las versiones de la
+  # pagina ni quita el Deny de TLS de un bucket que se queda.
+  BucketWeb:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName:
+        Fn::Sub: "agente-iam-web-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: proyecto
+          Value: agente-iam
+
+  PoliticaBucketWeb:
+    Type: AWS::S3::BucketPolicy
+    # Como el bucket: borrar la pila no quita el Deny de TLS de un bucket que se queda.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Bucket:
+        Ref: BucketWeb
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Solo CloudFront y solo esta distribucion: sin aws:SourceArn, cualquier
+          # distribucion de cualquier cuenta podria leer el bucket.
+          - Sid: SoloEstaDistribucionLee
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource:
+              Fn::Sub: "${BucketWeb.Arn}/*"
+            Condition:
+              StringEquals:
+                aws:SourceArn:
+                  Fn::Sub: "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribucion}"
+          - Sid: SoloConTLS
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - Fn::GetAtt: [BucketWeb, Arn]
+              - Fn::Sub: "${BucketWeb.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # OAC (no la OAI antigua): CloudFront firma cada peticion a S3 con SigV4.
+  AccesoOrigen:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: agente-iam-web
+        Description: Acceso de CloudFront al bucket privado de la pagina web de Agente IAM
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  CabecerasSeguridad:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: agente-iam-web-cabeceras
+        Comment: Cabeceras de seguridad de la pagina web de Agente IAM
+        SecurityHeadersConfig:
+          ContentSecurityPolicy:
+            Override: true
+            ContentSecurityPolicy:
+              Fn::Sub: "default-src 'none'; script-src 'self'; style-src 'self'; connect-src ${DominioCognito} https://bedrock-agentcore.us-east-1.amazonaws.com https://sts.us-east-1.amazonaws.com; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+          StrictTransportSecurity:
+            Override: true
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+          ContentTypeOptions:
+            Override: true
+          ReferrerPolicy:
+            Override: true
+            ReferrerPolicy: no-referrer
+          FrameOptions:
+            Override: true
+            FrameOption: DENY
+
+  Distribucion:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: agente-iam-web
+        DefaultRootObject: index.html
+        HttpVersion: http2
+        PriceClass: PriceClass_100
+        Aliases:
+          Fn::If:
+            - ConDominio
+            - - Ref: DominioWeb
+            - Ref: AWS::NoValue
+        Origins:
+          - Id: web
+            DomainName:
+              Fn::GetAtt: [BucketWeb, RegionalDomainName]
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+            OriginAccessControlId:
+              Ref: AccesoOrigen
+        DefaultCacheBehavior:
+          TargetOriginId: web
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          # Politica gestionada CachingOptimized.
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          ResponseHeadersPolicyId:
+            Ref: CabecerasSeguridad
+        # Con dominio, certificado propio en sni-only: es la unica forma de que
+        # TLSv1.2_2021 rija. Sin dominio, como en la Fase 23 (CloudFront aplica TLSv1).
+        ViewerCertificate:
+          Fn::If:
+            - ConDominio
+            - AcmCertificateArn:
+                Ref: CertificadoArn
+              SslSupportMethod: sni-only
+              MinimumProtocolVersion: TLSv1.2_2021
+            - CloudFrontDefaultCertificate: true
+              MinimumProtocolVersion: TLSv1.2_2021
+      Tags:
+        - Key: proyecto
+          Value: agente-iam
+
+Outputs:
+  UrlWeb:
+    Description: URL de la pagina, la del dominio propio si lo hay (con ella, mas una barra final, se rellena UrlRetornoWeb de la pila de acceso).
+    Value:
+      Fn::If:
+        - ConDominio
+        - Fn::Sub: "https://${DominioWeb}"
+        - Fn::Sub: "https://${Distribucion.DomainName}"
+  DominioCloudFront:
+    Description: Nombre de la distribucion en CloudFront, destino de los alias A y AAAA del dominio propio en la zona de gestion.
+    Value:
+      Fn::GetAtt: [Distribucion, DomainName]
+  BucketWeb:
+    Description: Bucket privado donde el administrador sube los ficheros de la pagina.
+    Value:
+      Ref: BucketWeb
+  DistribucionId:
+    Description: Id de la distribucion (para invalidar la cache al subir ficheros nuevos).
+    Value:
+      Ref: Distribucion

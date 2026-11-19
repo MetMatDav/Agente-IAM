@@ -1,0 +1,10 @@
+{
+  "campos": {
+    "servicio": "s3",
+    "recurso": "bucket-que-no-existe-111122223333",
+    "region": "us-east-1"
+  },
+  "horas": 1,
+  "correo_aviso": "persona@example.com",
+  "justificacion": "Necesito ver los archivos del bucket bucket-que-no-existe para una revision. No necesito subir ni borrar nada."
+}
